@@ -2,9 +2,6 @@ import os
 import copy
 import time
 import argparse
-import torch.distributed
-import torch.distributed.elastic
-import torch.distributed.elastic.multiprocessing
 from tqdm import tqdm
 import wandb
 
@@ -21,9 +18,9 @@ from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 import numpy as np 
 import torch.optim as optim
 
-import geneNets_2_3_17 as gn
-from utils import generate_square_subsequent_mask
-from experiments._transformer import LanguageModel, predict_sequence
+import torchGB as gn
+from torchGB.utils import generate_square_subsequent_mask
+from _transformer import LanguageModel, predict_sequence
 
 
 parser = argparse.ArgumentParser()
@@ -32,7 +29,7 @@ parser.add_argument("--name", type=str,
                     default="Test", help="Name of the experiment.")
 
 parser.add_argument("--gpus", type=str, 
-                    default="2,3", help="Which GPUS to use.")
+                    default="0,1", help="Which GPUS to use.")
 
 parser.add_argument("--dataset", type=str, 
                     default="oscar2301", help="Name of the language dataset.")
@@ -255,7 +252,9 @@ def train(model: nn.Module, GNets) -> None:
                 best_model = copy.deepcopy(model)
                 
                 if enable_gnets and rank == 0:
-                    fname = experiment_name + "_" + args.dataset + "_" + args.language + "_best" + ".pth"
+                    fname = os.path.join(os.path.getcwd(), "weights")
+                    fname += experiment_name + "_" + args.dataset + "_" 
+                    fname += args.language + "_best" + ".pth"
                     GNets.save(fname) 
 
 
@@ -284,7 +283,7 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
 
 
 ignore_layers = ["encoder.weight", "decoder.weight", "norm"]
-GNets = gn.GNetList(model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers, gpu_list=gpu_list) if (enable_gnets or init_with_gnets) and rank == 0 else None
+GNets = gn.GenomicBottleneck(model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers, gpu_list=gpu_list) if (enable_gnets or init_with_gnets) and rank == 0 else None
 if (enable_gnets or init_with_gnets) and rank == 0: GNets.to(rank)
 
 if args.load_gnets is not None and rank == 0:

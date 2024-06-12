@@ -1,11 +1,14 @@
+import numpy as np
+
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
 from torch.nn import TransformerEncoder, TransformerEncoderLayer, Transformer
 
-import numpy as np
 
-from utils import generate_square_subsequent_mask
+def generate_square_subsequent_mask(sz: int):
+    """Generates an upper-triangular matrix of -inf, with zeros on diag."""
+    return torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
 
 
 class PositionalEncoding(nn.Module):
@@ -48,15 +51,13 @@ class LanguageModel(nn.Module):
                 num_heads: int, 
                 hidden_dim: int,
                 num_layers: int, 
-                dropout: float = 0.1,
-                ff_dim: int = 2048) -> None:
+                dropout: float = 0.1) -> None:
         super().__init__()
         self.pos_encoder = PositionalEncoding(embedding_dim, dropout)
         encoder_layers = TransformerEncoderLayer(embedding_dim, 
                                                 num_heads, 
                                                 hidden_dim, 
                                                 dropout,
-                                                dim_feedforward=ff_dim,
                                                 norm_first=True, 
                                                 activation=F.silu)
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers)

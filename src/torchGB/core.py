@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch import Tensor
 
-from src.torchGB.utils import find_layer, get_tensor_dimensions, generate_GDN_layer
+from .utils import find_layer, get_tensor_dimensions, generate_GDN_layer
 
 
 NIL = 0 # No encoding
@@ -92,7 +92,7 @@ class GNet:
         self.grad_scale = grad_scale
 
 
-class GNetList(nn.Module):
+class GenomicBottleneck(nn.Module):
     """
     TODO docstring
 
@@ -107,7 +107,7 @@ class GNetList(nn.Module):
                 input_shape: Tuple[int, int] = (256, 256),
                 ignore_layers: Optional[Sequence[str]] = [],
                 gpu_list: Optional[Sequence[int]] = []):
-        super(GNetList, self).__init__()             
+        super(GenomicBottleneck, self).__init__()             
         
         # Stores all the information about the gnets
         self.gnetdict = {}
