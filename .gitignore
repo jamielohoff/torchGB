@@ -57,4 +57,5 @@ MANIFEST
 **/weights/
 **/wandb/
 **/plots/
-
+*.pt
+*.pth

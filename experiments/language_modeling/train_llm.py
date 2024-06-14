@@ -202,13 +202,13 @@ def train(model: nn.Module, GNets: gn.GenomicBottleneck) -> None:
         # This probably fucks up the training a bit because the weights change
         # slightly which messes with the optimizer momentum, it is propably 
         # responsible for the bumps in the loss curve
-        print("\nrank", rank,"before", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
+        # print("\nrank", rank,"before", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
         # print("\nrank", rank,"before", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight)
         if enable_gnets:
             GNets.zero_grad()
             GNets.predict_weights(model)
 
-        print("\nrank", rank, "after", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
+        # print("\nrank", rank, "after", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
         # print("\nrank", rank, "after", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight)
 
         output = model(data[:, :-1], src_mask)
@@ -293,7 +293,7 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
 # we've seen so far. Adjust the learning rate after each epoch.
 
 
-ignore_layers = ["encoder.weight", "decoder.weight", "norm", "bias"]
+ignore_layers = ["encoder.weight", "decoder.weight", "norm"]
 GNets = gn.GenomicBottleneck(rank, model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers) if (enable_gnets or init_with_gnets) else None
 
 if args.load_gnets is not None:

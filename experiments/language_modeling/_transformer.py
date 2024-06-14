@@ -66,7 +66,7 @@ class LanguageModel(nn.Module):
         self.embedding_dim = embedding_dim
         self.decoder = nn.Linear(embedding_dim, num_tokens, bias=False)
         
-        self.apply(self.init_weights)
+        # self.apply(self.init_weights)
         self.decoder.weight = self.encoder.weight # Tie weights
         
     def init_weights(self, module: nn.Module) -> None:
