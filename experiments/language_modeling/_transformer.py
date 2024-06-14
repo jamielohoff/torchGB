@@ -58,21 +58,22 @@ class LanguageModel(nn.Module):
                                                 num_heads, 
                                                 hidden_dim, 
                                                 dropout,
-                                                norm_first=True, 
-                                                activation=F.silu)
+                                                norm_first=False,
+                                                batch_first=True, 
+                                                activation=F.gelu)
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers)
         self.encoder = nn.Embedding(num_tokens, embedding_dim)
         self.embedding_dim = embedding_dim
         self.decoder = nn.Linear(embedding_dim, num_tokens, bias=False)
         
-        # self.apply(self.init_weights)
+        self.apply(self.init_weights)
         self.decoder.weight = self.encoder.weight # Tie weights
         
     def init_weights(self, module: nn.Module) -> None:
-        if isinstance(module, nn.Embedding):
-            nn.init.xavier_normal_(module.weight)
+        # if isinstance(module, nn.Embedding):
+        #     nn.init.xavier_normal_(module.weight)
             
-        elif isinstance(module, nn.TransformerEncoderLayer):
+        if isinstance(module, nn.TransformerEncoderLayer):
             nn.init.xavier_normal_(module.self_attn.in_proj_weight)
             nn.init.zeros_(module.self_attn.in_proj_bias)
             nn.init.xavier_normal_(module.self_attn.out_proj.weight)
@@ -104,16 +105,17 @@ class LanguageModel(nn.Module):
         return output
     
 
-def generate_sequence(model, sequence, device, seq_size=20):        
-    sequence = sequence.unsqueeze(1)
-    src_mask = generate_square_subsequent_mask(seq_size+len(sequence))
+def generate_sequence(model, sequence, device, seq_size=32):       
+    sequence = sequence.unsqueeze(0)
+    src_mask = generate_square_subsequent_mask(seq_size+sequence.size(1))
     generate_step = 0
     while generate_step < seq_size:
-        _src_mask = src_mask[:len(sequence), :len(sequence)].to(device)
-        output_word = torch.argmax(model(sequence, _src_mask)[-1, :], dim=1).unsqueeze(0)
-        sequence = torch.cat((sequence, output_word), dim=0)
+        _src_mask = src_mask[:sequence.size(1), :sequence.size(1)].to(device)
+        output_word = torch.argmax(model(sequence, _src_mask)[-1, :], dim=1)[-1:]
+        output_word = output_word.unsqueeze(0)
+        sequence = torch.cat((sequence, output_word), dim=1)
         generate_step += 1
-    sequence = sequence.squeeze(1)
+    sequence = sequence.squeeze(0)
     return sequence
 
 

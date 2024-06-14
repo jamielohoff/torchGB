@@ -4,6 +4,7 @@ import time
 import argparse
 from tqdm import tqdm
 import wandb
+import numpy as np 
 
 import torch
 from torch import nn
@@ -15,7 +16,6 @@ from datasets import load_dataset, DatasetDict
 from datasets.distributed import split_dataset_by_node
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 
-import numpy as np 
 import torch.optim as optim
 
 import torchGB as gn
@@ -29,7 +29,7 @@ parser.add_argument("--name", type=str,
                     default="Test", help="Name of the experiment.")
 
 parser.add_argument("--gpus", type=str, 
-                    default="0,1", help="Which GPUS to use.")
+                    default="0", help="Which GPUS to use.")
 
 parser.add_argument("--dataset", type=str, 
                     default="oscar2301", help="Name of the language dataset.")
@@ -41,7 +41,7 @@ parser.add_argument("--epochs", type=int,
                     default=50, help="Number of training epochs.")
 
 parser.add_argument("--batchsize", type=int,
-                    default=96, help="Training batchsize.")
+                    default=64, help="Training batchsize.")
 
 parser.add_argument("--seq_len", type=int, 
                     default=256, help="Context length of the transformer.")
@@ -97,8 +97,16 @@ oscar_dataset = load_dataset("oscar-corpus/OSCAR-2301",
                             token="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", 
                             trust_remote_code=True,
                             streaming=True)
-tokenizer = AutoTokenizer.from_pretrained("bert-base-cased", do_lower_case=False)
 
+if args.language == "en":
+    language_identifier = ""
+elif args.language == "de":
+    language_identifier = "-german"
+elif args.language == "es":
+    language_identifier = "-spanish"
+
+tokenizer = AutoTokenizer.from_pretrained("gpt2", do_lower_case=False)
+tokenizer.add_special_tokens({'pad_token': '[PAD]'})
 
 M = 2 # TODO do something about this hardcoding and validation
 test_dataset = oscar_dataset.take(M*1024)
@@ -171,17 +179,17 @@ train_loader = DataLoader(train_data,
                         pin_memory=True, 
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
 val_loader = DataLoader(val_data, 
-                        batch_size=EVAL_BATCHSIZE, 
+                        batch_size=BATCHSIZE, 
                         pin_memory=True,
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
 test_loader = DataLoader(test_data, 
-                        batch_size=EVAL_BATCHSIZE, 
+                        batch_size=BATCHSIZE, 
                         pin_memory=True,
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
 
 
-def train(model: nn.Module, GNets) -> None:
-    if enable_gnets and rank == 0: GNets.train()
+def train(model: nn.Module, GNets: gn.GenomicBottleneck) -> None:
+    if enable_gnets: GNets.train()
     
     total_loss = 0.
     start_time = time.time()
@@ -189,26 +197,29 @@ def train(model: nn.Module, GNets) -> None:
     pbar = enumerate(tqdm(train_loader))
     for batch, data in pbar:
         model.train()
-        data = data["input_ids"].t().to(rank)
+        data = data["input_ids"].to(rank)
         optimizer.zero_grad()
         # This probably fucks up the training a bit because the weights change
         # slightly which messes with the optimizer momentum, it is propably 
         # responsible for the bumps in the loss curve
-        if enable_gnets and rank == 0:
+        print("\nrank", rank,"before", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
+        # print("\nrank", rank,"before", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight)
+        if enable_gnets:
             GNets.zero_grad()
-            # print("\nbefore", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
             GNets.predict_weights(model)
-            # print("\nafter", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
 
-        output = model(data[:-1, :], src_mask)
-        loss = criterion(output.view(-1, num_tokens), data[1:, :].reshape(-1))
+        print("\nrank", rank, "after", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
+        # print("\nrank", rank, "after", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight)
+
+        output = model(data[:, :-1], src_mask)
+        loss = criterion(output.view(-1, num_tokens), data[:, 1:].reshape(-1))
 
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 0.25)
-        if enable_gnets and rank == 0: GNets.backward(model)
+        if enable_gnets: GNets.backward(model)
         
         optimizer.step()
-        if enable_gnets and rank == 0: GNets.step()
+        if enable_gnets: GNets.step()
         total_loss += loss.item()
         if batch % LOG_INTERVAL == 0 and batch > 0:
             ms_per_batch = (time.time() - start_time) * 1000 / LOG_INTERVAL
@@ -249,10 +260,10 @@ def train(model: nn.Module, GNets) -> None:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 global best_model
-                best_model = copy.deepcopy(model)
+                best_model = copy.deepcopy(model).cpu()
                 
                 if enable_gnets and rank == 0:
-                    fname = os.path.join(os.path.getcwd(), "weights")
+                    fname = os.path.join(os.getcwd(), "weights")
                     fname += experiment_name + "_" + args.dataset + "_" 
                     fname += args.language + "_best" + ".pth"
                     GNets.save(fname) 
@@ -265,14 +276,14 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
     norm = 0
     with torch.no_grad():
         for data in eval_loader:
-            data = data["input_ids"].t().to(rank)
+            data = data["input_ids"].to(rank)
 
-            seq_len = data.size(0)
+            seq_len = data.size(1)
             if seq_len != SEQ_LEN:
                 src_mask = src_mask[:seq_len, :seq_len]
-            output = model(data[:-1, :], src_mask)
+            output = model(data[:, :-1], src_mask)
             output_flat = output.view(-1, num_tokens)
-            total_loss += criterion(output_flat, data[1:, :].reshape(-1)).item()
+            total_loss += criterion(output_flat, data[:, 1:].reshape(-1)).item()
             norm += 1
     return torch.tensor([total_loss / norm]).to(rank)
 
@@ -283,16 +294,14 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
 
 
 ignore_layers = ["encoder.weight", "decoder.weight", "norm"]
-GNets = gn.GenomicBottleneck(model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers, gpu_list=gpu_list) if (enable_gnets or init_with_gnets) and rank == 0 else None
-if (enable_gnets or init_with_gnets) and rank == 0: GNets.to(rank)
+GNets = gn.GenomicBottleneck(rank, model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers, gpu_list=gpu_list) if (enable_gnets or init_with_gnets) else None
 
-if args.load_gnets is not None and rank == 0:
+if args.load_gnets is not None:
     GNets.load(args.load_gnets)
     print("Loaded gnet weights from", args.load_gnets)
     
 if init_with_gnets:
-    if rank == 0:
-        GNets.predict_weights(model, rank)
+    GNets.predict_weights(model, rank)
     print("Initial performance with gnet init:")
     val_ppl = evaluate(model, val_loader)
     test_ppl = evaluate(model, test_loader)
@@ -305,7 +314,7 @@ print("Number of model parameters:", num_params)
 
 
 if rank == 0:
-    compression_factor = GNets.compression(model) if enable_gnets else 1.0
+    compression_factor = 1. # GNets.compression(model) if enable_gnets else 1.0
     print("gnet compression:", compression_factor)  
     run_config = {"epochs": EPOCHS,
                     "lr": LR,
