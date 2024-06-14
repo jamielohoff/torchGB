@@ -2,21 +2,21 @@ import os
 import copy
 import time
 import argparse
+
 from tqdm import tqdm
 import wandb
 import numpy as np 
 
 import torch
-from torch import nn
+import torch.nn as nn
+import torch.optim as optim
+import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
 
 from datasets import load_dataset, DatasetDict
 from datasets.distributed import split_dataset_by_node
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling
-
-import torch.optim as optim
 
 import torchGB as gn
 from torchGB.utils import generate_square_subsequent_mask
@@ -139,9 +139,9 @@ def tokenize_function(element):
 # Multiprocessing setup
 # os.environ["MASTER_ADDR"] = "localhost"
 # os.environ["MASTER_PORT"] = "12355"
-init_process_group(backend="nccl")
-rank = int(os.environ["LOCAL_RANK"])
-world_size = torch.distributed.get_world_size()
+dist.init_process_group(backend="nccl")
+rank = dist.get_rank()
+world_size = dist.get_world_size()
 
 
 rm_cols = oscar_dataset["train"].column_names
@@ -224,7 +224,7 @@ def train(model: nn.Module, GNets: gn.GenomicBottleneck) -> None:
         if batch % LOG_INTERVAL == 0 and batch > 0:
             ms_per_batch = (time.time() - start_time) * 1000 / LOG_INTERVAL
             cur_loss = torch.tensor([total_loss / LOG_INTERVAL]).to(rank)
-            torch.distributed.all_reduce(cur_loss, op=torch.distributed.ReduceOp.AVG)
+            dist.all_reduce(cur_loss, op=dist.ReduceOp.AVG)
             cur_loss = cur_loss.cpu().item()
             ppl = np.exp(cur_loss)
             if rank == 0:
@@ -244,7 +244,7 @@ def train(model: nn.Module, GNets: gn.GenomicBottleneck) -> None:
         if batch % args.validation_interval == 0 and batch > 0:
             # We do not train on the entire dataset per epoch...
             val_loss = evaluate(model, val_loader)
-            torch.distributed.all_reduce(val_loss, op=torch.distributed.ReduceOp.AVG)
+            dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
             val_ppl = np.exp(val_loss.cpu().item()) # Word-level PPL -- use 
             elapsed = time.time() - epoch_start_time
 
@@ -293,8 +293,8 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
 # we've seen so far. Adjust the learning rate after each epoch.
 
 
-ignore_layers = ["encoder.weight", "decoder.weight", "norm"]
-GNets = gn.GenomicBottleneck(rank, model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers, gpu_list=gpu_list) if (enable_gnets or init_with_gnets) else None
+ignore_layers = ["encoder.weight", "decoder.weight", "norm", "bias"]
+GNets = gn.GenomicBottleneck(rank, model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers) if (enable_gnets or init_with_gnets) else None
 
 if args.load_gnets is not None:
     GNets.load(args.load_gnets)
@@ -359,5 +359,5 @@ print("=" * 89)
 print(f"| End of training | test loss {test_loss:5.2f} | "
       f"test ppl {test_ppl:8.2f}")
 print("=" * 89)
-destroy_process_group()
+dist.destroy_process_group()
 
