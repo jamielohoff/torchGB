@@ -48,7 +48,7 @@ parser.add_argument("--seq_len", type=int,
 parser.add_argument("--log_interval", type=int, 
                     default=100, help="Logging every n batches.")
 
-parser.add_argument("--validation_interval", type=int, 
+parser.add_argument("--val_interval", type=int, 
                     default=5000, help="Validation every n batches.")
 
 parser.add_argument("--compression_size", type=int, 
@@ -71,7 +71,6 @@ args = parser.parse_args()
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
 
-gpu_list = [int(s) for s in args.gpus.split(",")]
 COMPRESSION_LAYER_SIZE = args.compression_size
 EPOCHS = args.epochs
 LR = 2e-4
@@ -185,12 +184,12 @@ test_loader = DataLoader(test_data,
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
 
 
+src_mask = generate_square_subsequent_mask(SEQ_LEN-1).to(rank)
 def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     if enable_gnets: gnets.train()
     
     total_loss = 0.
     start_time = time.time()
-    src_mask = generate_square_subsequent_mask(SEQ_LEN-1).to(rank)
     pbar = enumerate(tqdm(train_loader))
     for batch, data in pbar:
         model.train()
@@ -233,7 +232,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             total_loss = 0
             start_time = time.time()
         
-        if batch % args.validation_interval == 0 and batch > 0:
+        if batch % args.val_interval == 0 and batch > 0:
             # We do not train on the entire dataset per epoch...
             val_loss = evaluate(model, val_loader)
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
@@ -286,7 +285,7 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
 
 
 ignore_layers = ["encoder.weight", "decoder.weight", "norm", "bias"]
-gnets = GenomicBottleneck(rank, model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers) if (enable_gnets or init_with_gnets) else None
+gnets = GenomicBottleneck(model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers) if (enable_gnets or init_with_gnets) else None
 
 if args.load_gnets is not None:
     gnets.load(args.load_gnets)
@@ -305,7 +304,7 @@ num_params = sum(p.numel() for p in model.parameters())
 print("Number of model parameters:", num_params)   
 
 
-compression_factor = gnets.compression(model) if enable_gnets else 1.0
+compression_factor = gnets.compression() if enable_gnets else 1.0
 print("G-Net compression:", compression_factor)  
 run_config = {"epochs": EPOCHS,
                 "lr": LR,
