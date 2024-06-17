@@ -7,8 +7,10 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer, Transformer
 
 
 def generate_square_subsequent_mask(sz: int):
-    """Generates an upper-triangular matrix of -inf, with zeros on diag."""
-    return torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
+    """
+    Generates an upper-triangular matrix of -inf, with zeros on diag.
+    """
+    return torch.triu(torch.ones(sz, sz) * float("-inf"), diagonal=1)
 
 
 class PositionalEncoding(nn.Module):
@@ -33,7 +35,7 @@ class PositionalEncoding(nn.Module):
         pe = torch.zeros(max_len, 1, d_model)
         pe[:, 0, 0::2] = torch.sin(position * div_term)
         pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, x: Tensor) -> Tensor:
         """
@@ -63,15 +65,15 @@ class LanguageModel(nn.Module):
                                                 activation=F.gelu)
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers)
         self.encoder = nn.Embedding(num_tokens, embedding_dim)
-        self.embedding_dim = embedding_dim
+        # self.embedding_dim = torch.tensor([embedding_dim])
         self.decoder = nn.Linear(embedding_dim, num_tokens, bias=False)
         
         # self.apply(self.init_weights)
-        self.decoder.weight = self.encoder.weight # Tie weights
+        # self.decoder.weight = self.encoder.weight # Tie weights
         
     def init_weights(self, module: nn.Module) -> None:
-        # if isinstance(module, nn.Embedding):
-        #     nn.init.xavier_normal_(module.weight)
+        if isinstance(module, nn.Embedding):
+            nn.init.xavier_normal_(module.weight)
             
         if isinstance(module, nn.TransformerEncoderLayer):
             nn.init.xavier_normal_(module.self_attn.in_proj_weight)
@@ -88,7 +90,7 @@ class LanguageModel(nn.Module):
             nn.init.xavier_normal_(module.weight)
             
         elif isinstance(module, nn.Linear) and module.bias is not None:
-            nn.init.zeros_(module.bias)
+           nn.init.zeros_(module.bias)
         
     def forward(self, src: Tensor, src_mask: Tensor) -> Tensor:
         """
@@ -98,11 +100,10 @@ class LanguageModel(nn.Module):
         Returns:
             output Tensor of shape [seq_len, batch_size, ntoken]
         """
-        src = self.encoder(src) # * np.sqrt(self.d_model)
+        src = self.encoder(src) # * torch.sqrt(self.embedding_dim).to(src.device)
         src = self.pos_encoder(src)
-        output = self.transformer_encoder(src, src_mask)
-        output = self.decoder(output)
-        return output
+        src = self.transformer_encoder(src, src_mask)
+        return self.decoder(src)
     
 
 def generate_sequence(model, sequence, device, seq_size=32):       
@@ -119,8 +120,7 @@ def generate_sequence(model, sequence, device, seq_size=32):
     return sequence
 
 
-def predict_sequence(sentence, tokenizer, model, device, seq_size=10):
-    print(f"Source: {sentence}")
+def predict_sequence(sentence, tokenizer, model, device, seq_size=32):
     input_ids = torch.tensor(tokenizer.encode(sentence), dtype=torch.long).to(device)
     generated_sequence = generate_sequence(model, input_ids, device, seq_size)
     print(f"Result: {tokenizer.decode(generated_sequence)}")

@@ -18,9 +18,8 @@ from datasets import load_dataset, DatasetDict
 from datasets.distributed import split_dataset_by_node
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 
-import torchGB as gn
-from torchGB.utils import generate_square_subsequent_mask
-from _transformer import LanguageModel, predict_sequence
+from torchGB import GenomicBottleneck
+from _transformer import LanguageModel, predict_sequence, generate_square_subsequent_mask
 
 
 parser = argparse.ArgumentParser()
@@ -66,7 +65,7 @@ parser.add_argument("--disable_gnets", action='store_false',
                     help="Use genomic bottleneck compression?")
 
 parser.add_argument("--init_with_gnets", action='store_false',
-                    help="Initialize the model with the weights predicted by the GNets.")
+                    help="Initialize the model with the weights predicted by the gnets.")
 
 args = parser.parse_args()
 
@@ -75,7 +74,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
 gpu_list = [int(s) for s in args.gpus.split(",")]
 COMPRESSION_LAYER_SIZE = args.compression_size
 EPOCHS = args.epochs
-LR = 3e-4
+LR = 2e-4
 BATCHSIZE = args.batchsize
 EVAL_BATCHSIZE = args.batchsize
 SEQ_LEN = args.seq_len+1
@@ -106,7 +105,7 @@ elif args.language == "es":
     language_identifier = "-spanish"
 
 tokenizer = AutoTokenizer.from_pretrained("gpt2", do_lower_case=False)
-tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
 M = 2 # TODO do something about this hardcoding and validation
 test_dataset = oscar_dataset.take(M*1024)
@@ -137,8 +136,6 @@ def tokenize_function(element):
 
 
 # Multiprocessing setup
-# os.environ["MASTER_ADDR"] = "localhost"
-# os.environ["MASTER_PORT"] = "12355"
 dist.init_process_group(backend="nccl")
 rank = dist.get_rank()
 world_size = dist.get_world_size()
@@ -161,7 +158,7 @@ test_data = split_dataset_by_node(test_data, rank=rank, world_size=world_size)
 
 num_tokens = tokenizer.vocab_size # size of vocabulary
 embedding_dim = 256 # embedding dimension
-hidden_dim = 256 # dimension of the feedforward network model in nn.TransformerEncoder
+hidden_dim = 512 # dimension of the feedforward network model in nn.TransformerEncoder
 num_layers = 12 # number of nn.TransformerEncoderLayer in nn.TransformerEncoder
 num_heads = 8 # number of heads in nn.MultiheadAttention
 dropout = 0.1 # dropout probability
@@ -188,8 +185,8 @@ test_loader = DataLoader(test_data,
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
 
 
-def train(model: nn.Module, GNets: gn.GenomicBottleneck) -> None:
-    if enable_gnets: GNets.train()
+def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
+    if enable_gnets: gnets.train()
     
     total_loss = 0.
     start_time = time.time()
@@ -202,24 +199,19 @@ def train(model: nn.Module, GNets: gn.GenomicBottleneck) -> None:
         # This probably fucks up the training a bit because the weights change
         # slightly which messes with the optimizer momentum, it is propably 
         # responsible for the bumps in the loss curve
-        # print("\nrank", rank,"before", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
-        # print("\nrank", rank,"before", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight)
         if enable_gnets:
-            GNets.zero_grad()
-            GNets.predict_weights(model)
-
-        # print("\nrank", rank, "after", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
-        # print("\nrank", rank, "after", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight)
+            gnets.zero_grad()
+            gnets.predict_weights(model)
 
         output = model(data[:, :-1], src_mask)
         loss = criterion(output.view(-1, num_tokens), data[:, 1:].reshape(-1))
 
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 0.25)
-        if enable_gnets: GNets.backward(model)
+        if enable_gnets: gnets.backward(model)
         
         optimizer.step()
-        if enable_gnets: GNets.step()
+        if enable_gnets: gnets.step()
         total_loss += loss.item()
         if batch % LOG_INTERVAL == 0 and batch > 0:
             ms_per_batch = (time.time() - start_time) * 1000 / LOG_INTERVAL
@@ -231,7 +223,7 @@ def train(model: nn.Module, GNets: gn.GenomicBottleneck) -> None:
                 wandb.log({"train_loss": cur_loss, 
                             "train ppl": ppl})
             print("-" * 89)
-            predict_sequence("Hello World!", tokenizer, model, rank, seq_size=32)
+            predict_sequence("Cold Spring Harbor", tokenizer, model, rank, seq_size=32)
             print("-" * 89)
             
             print(f"| epoch {epoch:3d} | {batch:5d} batches | "
@@ -249,7 +241,7 @@ def train(model: nn.Module, GNets: gn.GenomicBottleneck) -> None:
             elapsed = time.time() - epoch_start_time
 
             print("-" * 89)
-            print("After joint p-net and g-net training:")
+            print("After joint P-Net and G-Net training:")
             print(f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | "
                 f"valid loss {float(val_loss):5.2f} | valid ppl {val_ppl:8.2f}")
             if rank == 0:
@@ -262,11 +254,11 @@ def train(model: nn.Module, GNets: gn.GenomicBottleneck) -> None:
                 global best_model
                 best_model = copy.deepcopy(model).cpu()
                 
-                if enable_gnets and rank == 0:
-                    fname = os.path.join(os.getcwd(), "weights")
-                    fname += experiment_name + "_" + args.dataset + "_" 
-                    fname += args.language + "_best" + ".pth"
-                    GNets.save(fname) 
+                if enable_gnets:
+                    fname = os.path.join(os.getcwd(), "weights/")
+                    fname += args.name + "_" + args.dataset + "_" 
+                    fname += args.language + "_" + str(dist.get_rank()) + ".pth"
+                    gnets.save(fname) 
 
 
 def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
@@ -293,45 +285,45 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
 # we've seen so far. Adjust the learning rate after each epoch.
 
 
-ignore_layers = ["encoder.weight", "decoder.weight", "norm"]
-GNets = gn.GenomicBottleneck(rank, model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers) if (enable_gnets or init_with_gnets) else None
+ignore_layers = ["encoder.weight", "decoder.weight", "norm", "bias"]
+gnets = GenomicBottleneck(rank, model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers) if (enable_gnets or init_with_gnets) else None
 
 if args.load_gnets is not None:
-    GNets.load(args.load_gnets)
+    gnets.load(args.load_gnets)
     print("Loaded gnet weights from", args.load_gnets)
     
 if init_with_gnets:
-    GNets.predict_weights(model, rank)
+    gnets.predict_weights(model, rank)
     print("Initial performance with gnet init:")
     val_ppl = evaluate(model, val_loader)
     test_ppl = evaluate(model, test_loader)
-    print(f"Validation PPL: {np.exp(val_ppl)}\n"
-          f"Test PPL: {np.exp(test_ppl)}")
+    print(f"Validation ppl: {np.exp(val_ppl)}\n"
+          f"Test ppl: {np.exp(test_ppl)}")
 
 
 num_params = sum(p.numel() for p in model.parameters())
 print("Number of model parameters:", num_params)   
 
 
-if rank == 0:
-    compression_factor = 1. # GNets.compression(model) if enable_gnets else 1.0
-    print("gnet compression:", compression_factor)  
-    run_config = {"epochs": EPOCHS,
-                    "lr": LR,
-                    "batchsize": BATCHSIZE,
-                    "seq_len": SEQ_LEN,
-                    "vocab_size": num_tokens,
-                    "embedding_dim": embedding_dim,
-                    "hidden_dim": hidden_dim,
-                    "num_layers": num_layers,
-                    "num_head": num_heads,
-                    "dropout": dropout,
-                    "log_interval": LOG_INTERVAL,
-                    "language": args.language,
-                    "compression_layer_size": COMPRESSION_LAYER_SIZE,
-                    "compression_factor": compression_factor,
-                    "num_params": num_params,}
+compression_factor = gnets.compression(model) if enable_gnets else 1.0
+print("G-Net compression:", compression_factor)  
+run_config = {"epochs": EPOCHS,
+                "lr": LR,
+                "batchsize": BATCHSIZE,
+                "seq_len": SEQ_LEN,
+                "vocab_size": num_tokens,
+                "embedding_dim": embedding_dim,
+                "hidden_dim": hidden_dim,
+                "num_layers": num_layers,
+                "num_head": num_heads,
+                "dropout": dropout,
+                "log_interval": LOG_INTERVAL,
+                "language": args.language,
+                "compression_layer_size": COMPRESSION_LAYER_SIZE,
+                "compression_factor": compression_factor,
+                "num_params": num_params,}
 
+if rank == 0:
     wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
                 host="https://wandb.fz-juelich.de")
     wandb.init(entity="ja-lohoff", project="GenomicBottleneck", 
@@ -344,7 +336,7 @@ for epoch in range(1, EPOCHS + 1):
     epoch_start_time = time.time()
     train_data.set_epoch(epoch)
     val_data.set_epoch(epoch)
-    train(model, GNets)
+    train(model, gnets)
     # scheduler.step()
         
         

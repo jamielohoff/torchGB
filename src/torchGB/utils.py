@@ -4,29 +4,6 @@ import torch
 import numpy as np
 
 
-def generate_square_subsequent_mask(sz: int):
-    """
-    Generates an upper-triangular matrix of -inf, with zeros on diag.
-    """
-    return torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
-
-
-def get_tensor_dimensions(model, layer, input_shape, for_input=False) -> torch.Tensor:
-    t_dims = None
-    def _local_hook(_, _input, _output):
-        nonlocal t_dims
-        t_dims = _input[0].size() if for_input else _output.size()
-        return _output
-    handle = layer.register_forward_hook(_local_hook)
-    dummy_var = torch.zeros(*input_shape, dtype=torch.int32).to('cuda')
-
-    bptt = input_shape[0]
-    src_mask = generate_square_subsequent_mask(bptt).to("cuda")
-    model(dummy_var, src_mask)
-    handle.remove()
-    return t_dims
-
-
 def find_layer(model, pname):
     """
     Inverse layer lookup function
@@ -34,13 +11,12 @@ def find_layer(model, pname):
     the layer that matches the given parameter name
     """
     found_it = False
-    Layer = []
-    Mname = []
+    Layer, Mname = [], []
             
     if not found_it:
         return Layer
     
-    # This is awfully slow, but it works
+    # This is awful
     for mname, layer in model.named_modules():
         for name, param in layer.named_parameters():
             ppname = mname+'.'+name
@@ -53,6 +29,18 @@ def find_layer(model, pname):
 
 
 def set_encoding_type(dlist, idx, t):
+    """
+    TODO docstring
+    TODO refactor this
+
+    Args:
+        dlist (_type_): _description_
+        idx (_type_): _description_
+        t (_type_): _description_
+
+    Raises:
+        ValueError: _description_
+    """
     if t == 1:        # one-hot vector
         dlist[idx] = idx
     elif t == 2:        # plain binary code
@@ -70,7 +58,7 @@ def set_encoding_type(dlist, idx, t):
     elif t == 5:        # Random code
         dlist[idx] = idx 
     else:
-        raise ValueError('Unknown nptype')
+        raise ValueError("Unknown nptype")
 
 
 def generate_GDN_layer(types: Sequence[int], 
@@ -78,6 +66,7 @@ def generate_GDN_layer(types: Sequence[int],
                     bits: Sequence[int], 
                     extras: Any = ()) -> Tuple[np.array, np.array]:
     """
+    TODO refactor this
     This function creates the inputs and targets used for the training of the
     genomic networks. 
     

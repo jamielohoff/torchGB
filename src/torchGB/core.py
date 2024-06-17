@@ -1,15 +1,16 @@
-from typing import Dict, Optional, Sequence, Tuple
+import copy
+from typing import Dict, Optional, Sequence
 
 import numpy as np
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
+import torch.nn.functional as F
 import torch.distributed as dist
 from torch import Tensor
 
-from .utils import find_layer, get_tensor_dimensions, generate_GDN_layer
+from .utils import find_layer, generate_GDN_layer
 
 
 NIL = 0 # No encoding
@@ -43,7 +44,7 @@ class GenomicBottleNet(nn.Module):
         length = len(sizes) - 1
         self.layers = nn.ModuleList([nn.Linear(sizes[i], sizes[i+1]) 
                                     for i in range(length)])
-        self.apply(self.init_weights)
+        # self.apply(self.init_weights)
 
     def forward(self, x: Tensor) -> Tensor:
         for layer in self.layers:
@@ -106,13 +107,14 @@ class GenomicBottleneck(nn.Module):
                 rank: int,
                 model: nn.Module, 
                 num_hidden_layers: int = 64, 
-                input_shape: Tuple[int, int] = (256, 256),
                 ignore_layers: Optional[Sequence[str]] = []):
         super(GenomicBottleneck, self).__init__()             
         
         # Stores all the information about the gnets
         self.gnetdict = {}
-        load_per_rank = [0 for _ in range(dist.get_world_size())]                                      
+        load_per_rank = [0 for _ in range(dist.get_world_size())]   
+        
+        # TODO this needs some disentanglement                                   
         for pname, param in model.named_parameters():            
             ignore_layer = any([layer_name in pname for layer_name in ignore_layers])
             if param.requires_grad and not ignore_layer:
@@ -121,7 +123,7 @@ class GenomicBottleneck(nn.Module):
                 load_per_rank[device_id] += param.data.numel()
                 
                 if device_id == dist.get_rank():
-                    print("Creating G-net for layer:", pname)
+                    print("Creating G-Net for layer:", pname)
                     print("Layer size:", np.array(param.shape))
                     print("Device ID:", device_id)   
 
@@ -198,15 +200,15 @@ class GenomicBottleneck(nn.Module):
                             gnet_sizes = (num_inputs, num_hidden_layers//2, 1)
 
                     # Add layer to the dict                                                          
-                    pname_cut = pname.split("weight")[0] # that's a sloppy way to do that
-                    pname_cut = pname_cut.split("bias")[0]
-                    for name_tmp, layer_tmp in model.named_modules():
-                        if name_tmp == pname_cut:
-                            _out_size = get_tensor_dimensions(model, layer_tmp, input_shape)
-                            _out_size = torch.tensor(_out_size)
+                    # pname_cut = pname.split("weight")[0] # that's a sloppy way to do that
+                    # pname_cut = pname_cut.split("bias")[0]
+                    # for name_tmp, layer_tmp in model.named_modules():
+                    #     if name_tmp == pname_cut:
+                    #         _out_size = get_tensor_dimensions(model, layer_tmp, input_shape)
+                    #         _out_size = torch.tensor(_out_size)
                             
-                    if isinstance(layer, nn.Conv2d):
-                        grad_scale = _out_size[-1][-1]
+                    # if isinstance(layer, nn.Conv2d):
+                    #     grad_scale = _out_size[-1][-1]
                         
                     gnet = GenomicBottleNet(gnet_sizes, output_scale=output_scale)
                     
@@ -227,11 +229,11 @@ class GenomicBottleneck(nn.Module):
                                                 grad_scale=None)
                                             
     def __repr__(self) -> str:  
-        output_str =  f"Gnet parameters:\n"
+        output_str =  f"G-Net parameters:\n"
         for name in self.gnetdict.keys():
             output_str += f"Parameter={name}\n" \
                         f"Parameter shape={self.gnetdict[name].new_weights.shape}\n" \
-                        f"GNet input shape={self.gnetdict[name].gnet_input.shape}\n\n"
+                        f"G-Net input shape={self.gnetdict[name].gnet_input.shape}\n\n"
         return output_str
                                                                          
     def get_num_params_gnet(self) -> int:
@@ -239,10 +241,18 @@ class GenomicBottleneck(nn.Module):
         Because gnets are now stored decentralized across devices, we need to
         compute them separately and then sum them up with a all_reduce operation.
         """
-        num_params = sum(param.numel() for name in self.gnetdict.keys() 
-                   for _, param in self.gnetdict[name].gnet.named_parameters())
+        num_params = torch.tensor([0]).to(dist.get_rank()) 
+        
+        for name in self.gnetdict.keys():
+            gnet = self.gnetdict[name].gnet
+            if gnet is not None:
+                n = sum(param.numel() for _, param in gnet.named_parameters())
+            else:
+                n = 0
+            num_params += torch.tensor([n]).to(dist.get_rank())
+        
         dist.all_reduce(num_params, op=dist.ReduceOp.SUM)
-        return num_params
+        return num_params.item()
     
     def compression(self, model) -> float:
         # TODO this function is massively inaccurate, needs fixing!
@@ -254,29 +264,31 @@ class GenomicBottleneck(nn.Module):
                         
     def save(self, fname: str) -> None:
         # TODO needs to be parallelized as well
-        print("Saving gnets ...\n") 
+        print("Saving G-Nets ...\n") 
         param_dict = {}
             
-        for name in self.gnetdict.keys():                                 
-            entry_name = name + "_state_dict"
-            model_name = "model_" + entry_name
-            optimizer_name = "optimizer_" + entry_name
-            param_dict[model_name] = self.gnetdict[name].gnet.state_dict()
-            param_dict[optimizer_name] = self.gnetdict[name].optimizer.state_dict()
+        for name in self.gnetdict.keys():     
+            if self.gnetdict[name].rank == dist.get_rank():     
+                entry_name = name + "_state_dict"
+                model_name = "model_" + entry_name
+                optimizer_name = "optimizer_" + entry_name
+                param_dict[model_name] = self.gnetdict[name].gnet.state_dict()
+                param_dict[optimizer_name] = self.gnetdict[name].optimizer.state_dict()
                         
         torch.save(param_dict, fname)
                       
     def load(self, fname: str) -> None:
         # TODO needs to be implemented similar to the init function
-        print("Loading gnets ...\n")
+        print("Loading G-Nets ...\n")
         checkpoint = torch.load(fname)
-            
-        for name in self.gnetdict.keys():                  
-            entry_name = name + "_state_dict"
-            model_name = "model_" + entry_name
-            optimizer_name = "optimizer_" + entry_name                
-            self.gnetdict[name].gnet.load_state_dict(checkpoint[model_name])
-            self.gnetdict[name].optimizer.load_state_dict(checkpoint[optimizer_name])
+
+        for name in self.gnetdict.keys():          
+            if self.gnetdict[name].rank == dist.get_rank():        
+                entry_name = name + "_state_dict"
+                model_name = "model_" + entry_name
+                optimizer_name = "optimizer_" + entry_name                
+                self.gnetdict[name].gnet.load_state_dict(checkpoint[model_name])
+                self.gnetdict[name].optimizer.load_state_dict(checkpoint[optimizer_name])
          
     def train(self) -> None:
         for name in self.gnetdict.keys():
@@ -310,12 +322,12 @@ class GenomicBottleneck(nn.Module):
                     param.data = nn.Parameter(new_weights)
                 param_list[self.gnetdict[name].rank].append(param.data)
                 
-        # TODO Get rid of the nested for-loop and replace by sth. faster, e.g. map
-        for i in range(dist.get_world_size()):
-            for j in range(len(param_list[i])):
+        # TODO Get rid of the nested for-loop and replace by sth. faster
+        for source_id in range(dist.get_world_size()):
+            for j in range(len(param_list[source_id])):
                 # Broadcast the weights of the gnets calculated on GPU with
                 # rank `dist.get_rank()` to all other GPUs.
-                dist.broadcast(param_list[i][j], src=i)
+                dist.broadcast(param_list[source_id][j], src=source_id)
     
     def backward(self, model) -> None:
         """
@@ -329,7 +341,6 @@ class GenomicBottleneck(nn.Module):
         for name, param in model.named_parameters():
             if name in self.gnetdict.keys():
                 if self.gnetdict[name].rank == dist.get_rank():
-                    # self.gnetdict[name].weights = param.data
                     device = self.gnetdict[name].grad_scale.device
                     norm_grad = torch.div(param.grad.to(device), self.gnetdict[name].grad_scale)
                     self.gnetdict[name].weights.backward(norm_grad)
