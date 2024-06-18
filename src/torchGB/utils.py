@@ -1,42 +1,46 @@
 from typing import Any, Sequence, Tuple
 
 import torch
+import torch.nn as nn
 import numpy as np
 
 
-def find_layer(model, pname):
+def find_layer(model: nn.Module, pname: str) -> nn.Module:
     """
     Inverse layer lookup function
     This function iterates through named modules in the model and finds 
     the layer that matches the given parameter name
+    
+    Args:
+        `model` (nn.Module): _description_
+        `pname` (str): _description_
+        
+    Returns:
+        nn.Module: _description_
     """
-    found_it = False
-    Layer, Mname = [], []
-            
-    if not found_it:
-        return Layer
-    
+    layer, mname = [], []
+                
     # This is awful
-    for mname, layer in model.named_modules():
-        for name, param in layer.named_parameters():
-            ppname = mname+'.'+name
-            if ppname == pname:
-                if mname == Mname:
-                    Layer = layer
-                    return Layer
+    for _mname, _layer in model.named_modules():
+        for name, param in _layer.state_dict():
+            _pname = _mname + "." + name
+            if _pname == pname:
+                if _mname == mname:
+                    layer = _layer
+                    return layer
     
-    return Layer
+    return layer
 
 
-def set_encoding_type(dlist, idx, t):
+def set_encoding_type(dlist: Sequence[int], idx: int, t: int) -> None:
     """
     TODO docstring
     TODO refactor this
 
     Args:
-        dlist (_type_): _description_
-        idx (_type_): _description_
-        t (_type_): _description_
+        `dlist` (Sequence[int]): _description_
+        `idx` (int): _description_
+        `t` (int): _description_
 
     Raises:
         ValueError: _description_
@@ -61,10 +65,10 @@ def set_encoding_type(dlist, idx, t):
         raise ValueError("Unknown nptype")
 
 
-def generate_GDN_layer(types: Sequence[int], 
-                    dims: Sequence[int], 
-                    bits: Sequence[int], 
-                    extras: Any = ()) -> Tuple[np.array, np.array]:
+def make_row_col_encoding(types: Sequence[int], 
+                        dims: Sequence[int], 
+                        bits: Sequence[int], 
+                        extras: Any = ()) -> np.array:
     """
     TODO refactor this
     This function creates the inputs and targets used for the training of the
@@ -78,10 +82,10 @@ def generate_GDN_layer(types: Sequence[int],
     W2, GC2      = generateGDNlayer((RND,HOT),[800,10],[3,10],(randomVector,(),()))
     
     Arguments:
-        - types(Sequence[int]): list of types of encoding for each variable
-        - dims(Sequence[int]): list of dimensions for each variable
-        - bits(Sequence[int]): list of bits for each variable
-        - extras(Any): additional information for each variable
+        `types` (Sequence[int]): list of types of encoding for each variable
+        `dims` (Sequence[int]): list of dimensions for each variable
+        `bits` (Sequence[int]): list of bits for each variable
+        `extras` (Any): additional information for each variable
         
     Returns:
         - Tuple[np.array, np.array]: Tuple of targets and inputs [W, GC]
@@ -89,11 +93,11 @@ def generate_GDN_layer(types: Sequence[int],
     npdims, nptypes, npbits = np.atleast_1d(dims, types, bits)
     
     # Make a row vector so that the shape matches the output
-    W1 = np.zeros(npdims.prod()).flatten()      
-    W1 = np.expand_dims(W1, 1)                  
-    W1 = torch.tensor(W1, dtype=torch.float32)
+    weight = np.zeros(npdims.prod()).flatten()      
+    weight = np.expand_dims(weight, 1)                  
+    weight = torch.tensor(weight, dtype=torch.float32)
 
-    GC1 = np.zeros((len(W1), npbits.sum()))
+    row_col_encoding = np.zeros((npdims.prod(), npbits.sum()))
        
     # This will make a list of arrays for each variable    
     var_list = []
@@ -175,17 +179,17 @@ def generate_GDN_layer(types: Sequence[int],
         
     # This will detach all GC tensors from the computational graph and thus
     # they will not be differentiated
-    GC1 = torch.tensor(all_vars, dtype=torch.float, requires_grad=False)
+    row_col_encoding = torch.tensor(all_vars, dtype=torch.float, requires_grad=False)
     
     # Check if rows exceed threshold (for what?)
-    for i in range(GC1.shape[1]):
-        maxCol = torch.max(GC1[:,i])
+    for i in range(row_col_encoding.shape[1]):
+        maxCol = torch.max(row_col_encoding[:,i])
         if maxCol > 1e-6:
-            GC1[:,i] = GC1[:,i]/maxCol
+            row_col_encoding[:,i] = row_col_encoding[:,i]/maxCol
             
-    # Normalize the GC1 so that it has zero mean and unit variance
+    # Normalize the row_col_encoding so that it has zero mean and unit variance
     with torch.no_grad():
-        GC1 = (GC1 - torch.mean(GC1)) / torch.std(GC1) # Xavier
+        row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / torch.std(row_col_encoding) # Xavier
     
-    return W1, GC1   
+    return row_col_encoding   
 

@@ -172,22 +172,18 @@ optimizer = optim.Adam(model.parameters(), lr=LR)
 
 train_loader = DataLoader(train_data, 
                         batch_size=BATCHSIZE,
-                        pin_memory=True, 
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
 val_loader = DataLoader(val_data, 
                         batch_size=BATCHSIZE, 
-                        pin_memory=True,
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
 test_loader = DataLoader(test_data, 
                         batch_size=BATCHSIZE, 
-                        pin_memory=True,
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
 
 
 src_mask = generate_square_subsequent_mask(SEQ_LEN-1).to(rank)
 def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     if enable_gnets: gnets.train()
-    
     total_loss = 0.
     start_time = time.time()
     pbar = enumerate(tqdm(train_loader))
@@ -202,6 +198,8 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             gnets.zero_grad()
             gnets.predict_weights(model)
 
+        # inputs = torch.ones_like(data[:, :-1]).to(rank)
+        # targets = torch.ones_like(data[:, 1:].reshape(-1)).to(rank)
         output = model(data[:, :-1], src_mask)
         loss = criterion(output.view(-1, num_tokens), data[:, 1:].reshape(-1))
 
@@ -262,9 +260,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
 
 def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
     model.eval() # turn on evaluation mode
-    total_loss = 0.
-    src_mask = generate_square_subsequent_mask(SEQ_LEN-1).to(rank)
-    norm = 0
+    total_loss, norm = 0., 0
     with torch.no_grad():
         for data in eval_loader:
             data = data["input_ids"].to(rank)
@@ -304,7 +300,7 @@ num_params = sum(p.numel() for p in model.parameters())
 print("Number of model parameters:", num_params)   
 
 
-compression_factor = gnets.compression() if enable_gnets else 1.0
+compression_factor = gnets.compression(model) if enable_gnets else 1.0
 print("G-Net compression:", compression_factor)  
 run_config = {"epochs": EPOCHS,
                 "lr": LR,

@@ -59,3 +59,4 @@ MANIFEST
 **/plots/
 *.pt
 *.pth
+**/__pycache__/
