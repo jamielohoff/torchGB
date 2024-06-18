@@ -61,10 +61,10 @@ parser.add_argument("--load_gnets", type=str,
 parser.add_argument("--wandb", type=str,
                     default="run", help="Wandb mode.")
 
-parser.add_argument("--disable_gnets", action='store_false',
+parser.add_argument("--disable_gnets", action="store_false",
                     help="Use genomic bottleneck compression?")
 
-parser.add_argument("--init_with_gnets", action='store_false',
+parser.add_argument("--init_with_gnets", action="store_false",
                     help="Initialize the model with the weights predicted by the gnets.")
 
 args = parser.parse_args()
@@ -88,11 +88,13 @@ if init_with_gnets:
 best_val_loss = float("inf")
 best_model = None
    
+with open("./token", "r") as f:
+    token = f.read()
 
 oscar_dataset = load_dataset("oscar-corpus/OSCAR-2301", 
                             language=args.language, 
                             split="train", 
-                            token="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", 
+                            token=token, 
                             trust_remote_code=True,
                             streaming=True)
 
@@ -194,9 +196,11 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         # This probably fucks up the training a bit because the weights change
         # slightly which messes with the optimizer momentum, it is propably 
         # responsible for the bumps in the loss curve
+        # print("rank", rank, "\nbefore", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
         if enable_gnets:
             gnets.zero_grad()
             gnets.predict_weights(model)
+        # print("rank", rank, "\nafter", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
 
         # inputs = torch.ones_like(data[:, :-1]).to(rank)
         # targets = torch.ones_like(data[:, 1:].reshape(-1)).to(rank)
@@ -275,11 +279,8 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
     return torch.tensor([total_loss / norm]).to(rank)
 
 
-######################################################################
 # Loop over epochs. Save the model if the validation loss is the best
 # we've seen so far. Adjust the learning rate after each epoch.
-
-
 ignore_layers = ["encoder.weight", "decoder.weight", "norm", "bias"]
 gnets = GenomicBottleneck(model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers) if (enable_gnets or init_with_gnets) else None
 
@@ -333,13 +334,9 @@ for epoch in range(1, EPOCHS + 1):
     val_data.set_epoch(epoch)
     train(model, gnets)
     # scheduler.step()
-        
-        
-######################################################################
+      
+  
 # Evaluate the best model on the test dataset
-# -------------------------------------------
-#
-
 test_loss = evaluate(best_model, test_loader) 
 test_ppl = np.exp(test_loss) # word-level PPL
 print("=" * 89)

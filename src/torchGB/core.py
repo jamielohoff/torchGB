@@ -1,4 +1,5 @@
 from typing import Dict, Optional, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -13,6 +14,7 @@ from .utils import find_layer
 from .gnet import GenomicBottleNet, conv2d_gnet_layer, default_gnet_layer
 
 
+@dataclass
 class GNetLayer:
     """
     This class stores all the information about the G-Net for a specific layer.
@@ -31,28 +33,12 @@ class GNetLayer:
     """
     name: str
     rank: int
-    gnet: GenomicBottleNet
-    optimizer: optim.Optimizer
-    gnet_input: Tensor
-    weights: Tensor
-    new_weights: Tensor
-    grad_scale: float
-    
-    def __init__(self, 
-                name: str, 
-                rank: int,
-                gnet: Optional[GenomicBottleNet] = None, 
-                optimizer: Optional[optim.Optimizer] = None, 
-                gnet_input: Optional[Tensor] = None, 
-                weights: Optional[Tensor] = None, 
-                grad_scale: Optional[float] = None) -> None:
-        self.rank = rank
-        self.name = name
-        self.gnet = gnet
-        self.optimizer = optimizer
-        self.gnet_input = gnet_input
-        self.weights = weights
-        self.grad_scale = grad_scale
+    gnet: Optional[GenomicBottleNet] = None
+    optimizer: Optional[optim.Optimizer] = None
+    gnet_input: Optional[Tensor] = None
+    weights: Optional[Tensor] = None
+    new_weights: Optional[Tensor] = None
+    grad_scale: Optional[float] = None
 
 
 class GenomicBottleneck(nn.Module):

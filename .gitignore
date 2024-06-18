@@ -60,3 +60,4 @@ MANIFEST
 *.pt
 *.pth
 **/__pycache__/
+**/token

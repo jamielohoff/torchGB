@@ -22,7 +22,7 @@ def find_layer(model: nn.Module, pname: str) -> nn.Module:
                 
     # This is awful
     for _mname, _layer in model.named_modules():
-        for name, param in _layer.state_dict():
+        for name in _layer.state_dict().keys():
             _pname = _mname + "." + name
             if _pname == pname:
                 if _mname == mname:
