@@ -14,23 +14,6 @@ from torch import Tensor
 from .utils import find_layer
 from .gnet import GenomicBottleNet, conv2d_gnet_layer, default_gnet_layer
 
-import _pickle as pickle # _pickle is the newer updated version (cpickle) I believe, with improved C-backend
-
-def append_save(param_dict, path):
-    with open(path,"ab") as f:
-        pickle.dump(param_dict, f)
-        
-def read_checkpoints(path):
-    checkpoints = []
-
-    with open(path,"rb") as f:
-        while True:
-            try:
-                checkpoints.append(pickle.load(f))
-            except EOFError:
-                break
-    return checkpoints
-    
 
 @dataclass
 class GNetLayer:
@@ -145,7 +128,7 @@ class GenomicBottleneck(nn.Module):
                 else:
                     self.gnetdict[pname] = GNetLayer(name=pname, rank=device_id)
                                             
-    def __repr__(self) -> str:  
+    def __repr__(self) -> str:
         output_str = f"G-Net parameters:\n"
         for name in self.gnetdict.keys():
             output_str += f"Parameter={name}\n" \
