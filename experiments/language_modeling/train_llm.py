@@ -198,7 +198,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     pbar = enumerate(tqdm(train_loader))
     for batch, data in pbar:
         model.train()
-        data = data["input_ids"] .to(rank)
+        data = data["input_ids"].to(rank)
         # print(torch.max(data), num_tokens)
         optimizer.zero_grad()
         # This probably fucks up the training a bit because the weights change
@@ -240,7 +240,6 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             start_time = time.time()
         
         if batch % args.val_interval == 0 and batch > 0:
-            print(gnets.state_dict())
             # We do not train on the entire dataset per epoch...
             val_loss = evaluate(model, val_loader)
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)

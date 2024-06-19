@@ -170,7 +170,7 @@ class GenomicBottleneck(nn.Module):
         compression = num_model_params/num_gnet_params
         return compression
     
-    def state_dict(self):
+    def state_dict(self) -> Dict[str, Dict[str, Tensor]]:
         state_dict = {}
         for name in self.gnetdict.keys():                    
             if self.gnetdict[name].rank == dist.get_rank():     
@@ -178,6 +178,7 @@ class GenomicBottleneck(nn.Module):
                 model_name = "model_" + entry_name
                 gnet_state_dict = self.gnetdict[name].gnet.state_dict()
                 state_dict[model_name] = gnet_state_dict
+        return state_dict
                     
     def save(self, fname: str) -> None:
         """
@@ -187,7 +188,7 @@ class GenomicBottleneck(nn.Module):
             `fname` (str): File to which we wish to write the weights of the G-Nets.
         """
         checkpoint = {}
-            
+
         for rank in range(dist.get_world_size()):
             if rank > 0:
                 checkpoint = torch.load(fname)
@@ -217,7 +218,7 @@ class GenomicBottleneck(nn.Module):
                 optimizer_name = "optimizer_" + entry_name            
                 self.gnetdict[name].gnet.load_state_dict(checkpoint[model_name])
                 self.gnetdict[name].optimizer.load_state_dict(checkpoint[optimizer_name])
-         
+
     def train(self) -> None:
         for name in self.gnetdict.keys():
             if self.gnetdict[name].rank == dist.get_rank():
