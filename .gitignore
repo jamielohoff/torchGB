@@ -61,3 +61,4 @@ MANIFEST
 *.pth
 **/__pycache__/
 **/token
+**/model_checkpoints

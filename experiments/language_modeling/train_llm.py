@@ -67,6 +67,9 @@ parser.add_argument("--disable_gnets", action="store_false",
 parser.add_argument("--init_with_gnets", action="store_false",
                     help="Initialize the model with the weights predicted by the gnets.")
 
+parser.add_argument("--checkpoint_model", action="store_false",
+                    help="Whether to store the model weights and optimizer.")
+
 args = parser.parse_args()
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
@@ -85,6 +88,7 @@ if init_with_gnets:
     assert args.load_gnets is not None, "Please enter a path to the weights for the gnets."
 
 
+experiment_name = "GBT_" + args.name if enable_gnets else args.name
 best_val_loss = float("inf")
 best_model = None
    
@@ -106,7 +110,7 @@ elif args.language == "es":
     language_identifier = "-spanish"
 
 tokenizer = AutoTokenizer.from_pretrained("gpt2", do_lower_case=False)
-tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+tokenizer.pad_token = tokenizer.eos_token
 
 M = 2 # TODO do something about this hardcoding and validation
 test_dataset = oscar_dataset.take(M*1024)
@@ -173,12 +177,15 @@ optimizer = optim.Adam(model.parameters(), lr=LR)
 
 
 train_loader = DataLoader(train_data, 
+                        pin_memory=True,
                         batch_size=BATCHSIZE,
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
-val_loader = DataLoader(val_data, 
+val_loader = DataLoader(val_data,
+                        pin_memory=True, 
                         batch_size=BATCHSIZE, 
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
 test_loader = DataLoader(test_data, 
+                        pin_memory=True,
                         batch_size=BATCHSIZE, 
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
 
@@ -191,7 +198,8 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     pbar = enumerate(tqdm(train_loader))
     for batch, data in pbar:
         model.train()
-        data = data["input_ids"].to(rank)
+        data = data["input_ids"] .to(rank)
+        # print(torch.max(data), num_tokens)
         optimizer.zero_grad()
         # This probably fucks up the training a bit because the weights change
         # slightly which messes with the optimizer momentum, it is propably 
@@ -201,9 +209,6 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             gnets.zero_grad()
             gnets.predict_weights(model)
         # print("rank", rank, "\nafter", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
-
-        # inputs = torch.ones_like(data[:, :-1]).to(rank)
-        # targets = torch.ones_like(data[:, 1:].reshape(-1)).to(rank)
         output = model(data[:, :-1], src_mask)
         loss = criterion(output.view(-1, num_tokens), data[:, 1:].reshape(-1))
 
@@ -224,7 +229,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 wandb.log({"train_loss": cur_loss, 
                             "train ppl": ppl})
             print("-" * 89)
-            predict_sequence("Cold Spring Harbor", tokenizer, model, rank, seq_size=32)
+            predict_sequence("Who invented the car?", tokenizer, model, rank, seq_size=32)
             print("-" * 89)
             
             print(f"| epoch {epoch:3d} | {batch:5d} batches | "
@@ -235,6 +240,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             start_time = time.time()
         
         if batch % args.val_interval == 0 and batch > 0:
+            print(gnets.state_dict())
             # We do not train on the entire dataset per epoch...
             val_loss = evaluate(model, val_loader)
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
@@ -256,23 +262,27 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 best_model = copy.deepcopy(model).cpu()
                 
                 if enable_gnets:
+                    print("Saving gnet weights...")
                     fname = os.path.join(os.getcwd(), "weights/")
-                    fname += args.name + "_" + args.dataset + "_" 
-                    fname += args.language + "_" + str(dist.get_rank()) + ".pth"
+                    fname += experiment_name + "_gnets_" + "_" + args.dataset
+                    fname += "_"  + args.language + ".pth"
                     gnets.save(fname) 
+                    if args.checkpoint_model:
+                        print("Saving model weights...")
+                        param_dict = {"model": model.state_dict(),
+                                    "optimizer": optimizer.state_dict()}
+                        torch.save(param_dict, fname.replace("gnets", "model"))
 
 
 def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
     model.eval() # turn on evaluation mode
-    total_loss, norm = 0., 0
+    total_loss, norm = 0, 0
+    global src_mask
     with torch.no_grad():
         for data in eval_loader:
             data = data["input_ids"].to(rank)
-
             seq_len = data.size(1)
-            if seq_len != SEQ_LEN:
-                src_mask = src_mask[:seq_len, :seq_len]
-            output = model(data[:, :-1], src_mask)
+            output = model(data[:, :-1], src_mask[:seq_len, :seq_len])
             output_flat = output.view(-1, num_tokens)
             total_loss += criterion(output_flat, data[:, 1:].reshape(-1)).item()
             norm += 1
@@ -324,7 +334,6 @@ if rank == 0:
                 host="https://wandb.fz-juelich.de")
     wandb.init(entity="ja-lohoff", project="GenomicBottleneck", 
                 group="oscar", config=run_config, mode=args.wandb)
-    experiment_name = "GBT_" + args.name if enable_gnets else args.name
     wandb.run.name = experiment_name + "_" + args.dataset + "_" + args.language
 
 

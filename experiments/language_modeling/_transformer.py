@@ -38,10 +38,6 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe", pe)
 
     def forward(self, x: Tensor) -> Tensor:
-        """
-        Args:
-            x: Tensor, shape [seq_len, batch_size, embedding_dim]
-        """
         x = x + self.pe[:x.size(0)]
         return self.dropout(x)
 
@@ -65,11 +61,11 @@ class LanguageModel(nn.Module):
                                                 activation=F.gelu)
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers)
         self.encoder = nn.Embedding(num_tokens, embedding_dim)
-        # self.embedding_dim = torch.tensor([embedding_dim])
+        self.embedding_dim = torch.tensor([embedding_dim])
         self.decoder = nn.Linear(embedding_dim, num_tokens, bias=False)
         
-        # self.apply(self.init_weights)
-        # self.decoder.weight = self.encoder.weight # Tie weights
+        self.apply(self.init_weights)
+        self.decoder.weight = self.encoder.weight # Tie weights
         
     def init_weights(self, module: nn.Module) -> None:
         if isinstance(module, nn.Embedding):
@@ -100,7 +96,7 @@ class LanguageModel(nn.Module):
         Returns:
             output Tensor of shape [seq_len, batch_size, ntoken]
         """
-        src = self.encoder(src) # * torch.sqrt(self.embedding_dim).to(src.device)
+        src = self.encoder(src) * torch.sqrt(self.embedding_dim).to(src.device)
         src = self.pos_encoder(src)
         src = self.transformer_encoder(src, src_mask)
         return self.decoder(src)
