@@ -308,11 +308,14 @@ ignore_layers = ["encoder.weight", "decoder.weight", "norm", "bias", "6", "7", "
 gnets = GenomicBottleneck(model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers) if (enable_gnets or init_with_gnets) else None
 
 if args.load_gnets is not None:
-    gnets.load(args.load_gnets)
-    gnets.predict_weights(model)
-    val_ppl = evaluate(model, val_loader)
-    print("val_ppl", np.exp(val_ppl.cpu().item()))
-    print("Loaded gnet weights from", args.load_gnets)
+    try:
+        gnets.load(args.load_gnets)
+        gnets.predict_weights(model)
+        val_ppl = evaluate(model, val_loader)
+        print("val_ppl", np.exp(val_ppl.cpu().item()))
+        print("Loaded gnet weights from", args.load_gnets)
+    except:
+        print("No G-Net existing under", args.load_gnets)
     
 if init_with_gnets:
     gnets.predict_weights(model)
