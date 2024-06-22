@@ -53,6 +53,9 @@ parser.add_argument("--compression_size", type=int, default=64,
 parser.add_argument("--load_gnets", type=str, default=None, 
                     help="Path to the gnet weights.")
 
+parser.add_argument("--load_model", type=str, default=None,
+                    help="Path to the model weights.")
+
 parser.add_argument("--wandb", type=str, default="run", help="Wandb mode.")
 
 parser.add_argument("--disable_gnets", action="store_false",
@@ -156,7 +159,7 @@ test_data = split_dataset_by_node(test_data, rank=rank, world_size=world_size)
 num_tokens = tokenizer.vocab_size # size of vocabulary
 num_heads = 12 # number of heads in nn.MultiheadAttention
 embedding_dim = 64*num_heads # embedding dimension 512
-hidden_dim = 2048 # dimension of the feedforward network model in nn.TransformerEncoder
+hidden_dim = 3072 # dimension of the feedforward network model in nn.TransformerEncoder
 num_layers = 12 # number of nn.TransformerEncoderLayer in nn.TransformerEncoder
 dropout = 0.1 # dropout probability
 model = LanguageModel(num_tokens, 
@@ -171,9 +174,17 @@ model = DDP(model, device_ids=[rank], output_device=rank)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=LR)
-scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
-# scheduler2 = optim.lr_scheduler.CosineAnnealingLR(optimizer, 2000, 0)
+scheduler = None
 
+if args.load_model is not None:
+    try:
+        model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["model"])
+        optimizer.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["optimizer"])
+        print("Loaded model weights from", args.load_model)
+    except:
+        print("No model existing under", args.load_model)
+else:
+    scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
 
 train_loader = DataLoader(train_data, 
                         pin_memory=True,
@@ -200,11 +211,9 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         data = data["input_ids"].to(rank)
         optimizer.zero_grad()
 
-        # print("rank", rank, "\nbefore", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
         if enable_gnets:
             gnets.zero_grad()
             gnets.predict_weights(model)
-        # print("rank", rank, "\nafter", model.module.transformer_encoder.layers[7].self_attn.in_proj_weight)
         
         output = model(data[:, :-1], src_mask)
         loss = criterion(output.view(-1, num_tokens), data[:, 1:].reshape(-1))
@@ -214,7 +223,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         if enable_gnets: gnets.backward(model)
         
         optimizer.step()
-        scheduler.step()
+        if scheduler is not None: scheduler.step()
 
         if enable_gnets: gnets.step()
         total_loss += loss.item()
