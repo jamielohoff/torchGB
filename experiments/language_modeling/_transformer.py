@@ -49,7 +49,8 @@ class LanguageModel(nn.Module):
                 num_heads: int, 
                 hidden_dim: int,
                 num_layers: int, 
-                dropout: float = 0.1) -> None:
+                dropout: float = 0.1,
+                tie_weights: bool = True) -> None:
         super().__init__()
         self.pos_encoder = PositionalEncoding(embedding_dim, dropout)
         encoder_layers = TransformerEncoderLayer(embedding_dim, 
@@ -62,31 +63,38 @@ class LanguageModel(nn.Module):
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers)
         self.encoder = nn.Embedding(num_tokens, embedding_dim)
         self.embedding_dim = torch.tensor([embedding_dim])
+        self.layer_norm = nn.LayerNorm(embedding_dim)
         self.decoder = nn.Linear(embedding_dim, num_tokens, bias=False)
         
         self.apply(self.init_weights)
-        self.decoder.weight = self.encoder.weight # Tie weights
+        if tie_weights:
+            self.decoder.weight = self.encoder.weight # Tie weights
         
     def init_weights(self, module: nn.Module) -> None:
+        # GPT-2 init as described in paper
         if isinstance(module, nn.Embedding):
-            nn.init.xavier_normal_(module.weight)
-            
-        if isinstance(module, nn.TransformerEncoderLayer):
-            nn.init.xavier_normal_(module.self_attn.in_proj_weight)
-            nn.init.zeros_(module.self_attn.in_proj_bias)
-            nn.init.xavier_normal_(module.self_attn.out_proj.weight)
-            nn.init.zeros_(module.self_attn.out_proj.bias)
-            
-            nn.init.xavier_normal_(module.linear1.weight)
-            nn.init.zeros_(module.linear1.bias)
-            nn.init.xavier_normal_(module.linear2.weight)
-            nn.init.zeros_(module.linear2.bias)
+            nn.init.normal_(module.weight, std=0.02)
             
         elif isinstance(module, nn.Linear):
-            nn.init.xavier_normal_(module.weight)
+            nn.init.normal_(module.weight, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
             
-        elif isinstance(module, nn.Linear) and module.bias is not None:
-           nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.TransformerEncoderLayer):
+            nn.init.normal_(module.self_attn.in_proj_weight, std=0.02)
+            if module.self_attn.in_proj_bias is not None:
+                nn.init.zeros_(module.self_attn.in_proj_bias)
+            nn.init.normal_(module.self_attn.out_proj.weight, std=0.02)
+            if module.self_attn.out_proj.bias is not None:
+                nn.init.zeros_(module.self_attn.out_proj.bias)
+            
+            nn.init.normal_(module.linear1.weight, std=0.02)
+            if module.linear1.bias is not None:
+                nn.init.zeros_(module.linear1.bias)
+            nn.init.normal_(module.linear2.weight, std=0.02)
+            if module.linear2.bias is not None:
+                nn.init.zeros_(module.linear2.bias)
+
         
     def forward(self, src: Tensor, src_mask: Tensor) -> Tensor:
         """
@@ -99,6 +107,7 @@ class LanguageModel(nn.Module):
         src = self.encoder(src) * torch.sqrt(self.embedding_dim).to(src.device)
         src = self.pos_encoder(src)
         src = self.transformer_encoder(src, src_mask)
+        src = self.layer_norm(src)
         return self.decoder(src)
     
 
@@ -116,10 +125,10 @@ def generate_sequence(model, sequence, device, seq_size=32):
     return sequence
 
 
-def predict_sequence(sentence, tokenizer, model, device, seq_size=32):
+def predict_sequence(sentence, tokenizer, model, device, seq_size=32) -> str:
     input_ids = torch.tensor(tokenizer.encode(sentence), dtype=torch.long).to(device)
     generated_sequence = generate_sequence(model, input_ids, device, seq_size)
-    print(f"Result: {tokenizer.decode(generated_sequence)}")
+    return f"Result: {tokenizer.decode(generated_sequence)}"
 
 
 # helper Module to convert tensor of input indices into corresponding tensor of token embeddings

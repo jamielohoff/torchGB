@@ -1,4 +1,3 @@
-import os
 from typing import Dict, Optional, Sequence
 from dataclasses import dataclass
 
@@ -7,12 +6,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 import torch.distributed as dist
 from torch import Tensor
 
 from .utils import find_layer
 from .gnet import GenomicBottleNet, conv2d_gnet_layer, default_gnet_layer
+from .lamb import Lamb
 
 
 @dataclass
@@ -66,18 +65,27 @@ class GenomicBottleneck(nn.Module):
     def __init__(self, 
                 model: nn.Module, 
                 hidden_dim: int = 64, 
+                lr: float = 1e-3,
                 ignore_layers: Optional[Sequence[str]] = []) -> None:
         super(GenomicBottleneck, self).__init__()             
         
         # Stores all the information about the gnets
         self.gnetdict = {}
-        load_per_rank = [0 for _ in range(dist.get_world_size())]   
+        load_per_rank = np.zeros(dist.get_world_size())  
+        i0 = 0
                                       
         for pname, param in model.named_parameters():            
             ignore_layer = any([layer_name in pname for layer_name in ignore_layers])
             if param.requires_grad and not ignore_layer:
                 # This implements a rudimentary load balancer across devices
-                device_id = min(enumerate(load_per_rank), key=lambda x: x[1])[0]
+                # that removes the bias towards the first device
+                device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
+                if device_id == 0:
+                    if i0 > 2:
+                        device_id = np.where(load_per_rank[1:] == load_per_rank[1:].min())[0][-1]
+                        device_id += 1
+                    else:
+                        i0 += 1
                 load_per_rank[device_id] += param.data.numel()
                 
                 if device_id == dist.get_rank():
@@ -108,6 +116,7 @@ class GenomicBottleneck(nn.Module):
                                                                         hidden_dim,
                                                                         output_scale)
                                 
+                    # TODO reintegrate this
                     # Add layer to the dict                                                          
                     # pname_cut = pname.split("weight")[0] # that's a sloppy way to do that
                     # pname_cut = pname_cut.split("bias")[0]
@@ -121,7 +130,7 @@ class GenomicBottleneck(nn.Module):
                     self.gnetdict[pname] = GNetLayer(name=pname,
                                                     rank=device_id,
                                                     gnet=gnet.to(device_id),
-                                                    optimizer=optim.Adam(gnet.parameters()),
+                                                    optimizer=Lamb(gnet.parameters(), lr=lr),
                                                     gnet_input=row_col_encoding.to(device_id),
                                                     weights=param.data,
                                                     grad_scale=grad_scale.to(device_id))
@@ -162,7 +171,7 @@ class GenomicBottleneck(nn.Module):
         This function computes the compression ratio of the G-Net to the model.
 
         Returns:
-            float: Compression factor of the G-Net to the model.
+            float: Compression factor of the G-Net with respect to the model.
         """
         num_model_params = sum(p.numel() for p in model.parameters())
         num_gnet_params = self.get_num_params_gnet()
@@ -191,7 +200,8 @@ class GenomicBottleneck(nn.Module):
 
         for rank in range(dist.get_world_size()):
             if rank > 0:
-                checkpoint = torch.load(fname)
+                checkpoint = torch.load(fname, map_location=torch.device("cpu"))
+            dist.barrier()
             for name in self.gnetdict.keys():
                 if self.gnetdict[name].rank == dist.get_rank() and dist.get_rank() == rank:
                     entry_name = name + "_state_dict"
@@ -199,7 +209,8 @@ class GenomicBottleneck(nn.Module):
                     optimizer_name = "optimizer_" + entry_name
                     checkpoint[model_name] = self.gnetdict[name].gnet.state_dict()
                     checkpoint[optimizer_name] = self.gnetdict[name].optimizer.state_dict()
-            torch.save(checkpoint, fname)
+            if dist.get_rank() == rank:
+                torch.save(checkpoint, fname)
             dist.barrier()
                       
     def load(self, fname: str) -> None:
@@ -209,7 +220,7 @@ class GenomicBottleneck(nn.Module):
         Args:
             `fname` (str): File from which to load the G-Nets.
         """
-        checkpoint = torch.load(fname)
+        checkpoint = torch.load(fname, map_location=torch.device("cpu"))
 
         for name in self.gnetdict.keys():      
             if self.gnetdict[name].rank == dist.get_rank():        
@@ -265,9 +276,7 @@ class GenomicBottleneck(nn.Module):
 
         Args:
             `model` (nn.Module): The neural network model.
-        """         
-        # TODO do not iterate over all parameters, but only the ones that are
-        # predicted by the G-Nets on this particular device       
+        """              
         for name, param in model.named_parameters():
             if name in self.gnetdict.keys():
                 if self.gnetdict[name].rank == dist.get_rank():
@@ -276,8 +285,6 @@ class GenomicBottleneck(nn.Module):
                     self.gnetdict[name].weights.backward(norm_grad)
                       
     def step(self) -> None:
-        # TODO do not iterate over all parameters, but only the ones that are
-        # predicted by the G-Nets on this particular device  
         for name in self.gnetdict.keys():
             if self.gnetdict[name].rank == dist.get_rank():
                 self.gnetdict[name].optimizer.step()
