@@ -20,7 +20,7 @@ from datasets.distributed import split_dataset_by_node
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling, PreTrainedTokenizerFast
 
 from torchGB import GenomicBottleneck
-from _transformer import LanguageModel, predict_sequence, generate_square_subsequent_mask
+from _transformer import GPT, predict_sequence, generate_square_subsequent_mask
 
 
 parser = argparse.ArgumentParser()
@@ -115,18 +115,12 @@ train_dataset = load_dataset("arrow",
 val_dataset = train_dataset.take(1024)
 test_dataset = train_dataset.take(1024)
 
-# gpt2_tokenizer = AutoTokenizer.from_pretrained("gpt2", do_lower_case=False)
-
-# tk_tokenizer = Tokenizer.from_file("tokenizers/oscar_2301_en/tokenizer.json")
-# tokenizer = PreTrainedTokenizerFast(tokenizer_object=tk_tokenizer)
-# tokenizer.bos_token = gpt2_tokenizer.bos_token
-# tokenizer.eos_token = gpt2_tokenizer.eos_token
-# tokenizer.unk_token = gpt2_tokenizer.unk_token
 print("Loading tokenizer...", file=sys.stdout)
-tokenizer = AutoTokenizer.from_pretrained("/p/home/jusers/lohoff1/jureca/Projects/torchGB/experiments/language_modeling/tokenizers/oscar_2301_en")
+tokenizer = AutoTokenizer.from_pretrained("/p/home/jusers/lohoff1/jureca/Projects/torchGB/experiments/language_modeling/tokenizers/oscar_2301_"+args.language)
 tokenizer.pad_token = tokenizer.eos_token
 
-oscar_dataset = DatasetDict({"train": oscar_dataset,
+
+oscar_dataset = DatasetDict({"train": train_dataset,
                             "test": test_dataset,
                             "validation": val_dataset})
 
@@ -151,13 +145,10 @@ def tokenize_function(element):
 
 
 # Multiprocessing setup
-# dist.init_process_group(backend="nccl")
+dist.init_process_group(backend="nccl")
 rank = dist.get_rank()
 world_size = dist.get_world_size()
-# rank          = int(os.environ["SLURM_PROCID"])
-# world_size    = int(os.environ["WORLD_SIZE"])
-print(rank, world_size, file=sys.stdout)
-dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+print("Rank:", rank, "World Size:", world_size)
 
 rm_cols = oscar_dataset["train"].column_names
 train_data = oscar_dataset["train"].map(tokenize_function, 
@@ -180,14 +171,15 @@ embedding_dim = 64*num_heads # embedding dimension 512
 hidden_dim = 3072 # dimension of the feedforward network model in nn.TransformerEncoder
 num_layers = 12 # number of nn.TransformerEncoderLayer in nn.TransformerEncoder
 dropout = 0.1 # dropout probability
-print("Init model...", file=sys.stdout)
-model = LanguageModel(num_tokens, 
-                    embedding_dim, 
-                    num_heads, 
-                    hidden_dim, 
-                    num_layers, 
-                    dropout,
-                    tie_weights=args.tie_weights).to(rank)
+print("Init model...")
+model = GPT(SEQ_LEN-1,
+	    num_tokens, 
+            embedding_dim, 
+            num_heads, 
+            hidden_dim, 
+            num_layers, 
+            dropout,
+            tie_weights=args.tie_weights).to(rank)
 model = DDP(model, device_ids=[rank], output_device=rank)
 
 
@@ -203,6 +195,7 @@ if args.load_model is not None:
     except:
         print("No model existing under", args.load_model)
 else:
+    print("Using scheduler...")
     scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
 
 train_loader = DataLoader(train_data, 
@@ -257,12 +250,12 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             if rank == 0:
                 wandb.log({"train_loss": cur_loss, 
                             "train ppl": ppl})
-                print("-" * 89)
-                print(predicted_seq)
-                print("-" * 89)
+                print("-" * 89, file=sys.stdout)
+                print(predicted_seq, file=sys.stdout)
+                print("-" * 89, file=sys.stdout)
                 print(f"| epoch {epoch:3d} | {batch:5d} batches | "
                   f"ms/batch {ms_per_batch:5.2f} | "
-                  f"loss {cur_loss:5.2f} | ppl {ppl:8.2f}")
+                  f"loss {cur_loss:5.2f} | ppl {ppl:8.2f}", file=sys.stdout)
             dist.barrier()
             
             total_loss = 0
@@ -275,10 +268,10 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             val_ppl = np.exp(val_loss.cpu().item()) # Word-level PPL -- use 
             elapsed = time.time() - epoch_start_time
 
-            print("-" * 89)
-            print("After joint P-Net and G-Net training:")
+            print("-" * 89, file=sys.stdout)
+            print("After joint P-Net and G-Net training:", file=sys.stdout)
             print(f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | "
-                f"valid loss {float(val_loss):5.2f} | valid ppl {val_ppl:8.2f}")
+                f"valid loss {float(val_loss):5.2f} | valid ppl {val_ppl:8.2f}", file=sys.stdout)
             if rank == 0:
                 wandb.log({"validation_loss": val_loss, 
                             "val ppl": val_ppl})
