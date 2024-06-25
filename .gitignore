@@ -54,7 +54,9 @@ MANIFEST
 .python-version
 
 # Project-specific ignores
-**/weights/
+*.pt
+*.pth
+*.zst
 **/wandb/
 **/plots/
 *.pt

@@ -14,15 +14,14 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+from tokenizers import Tokenizer
 from datasets import load_dataset, DatasetDict
 from datasets.distributed import split_dataset_by_node
-from transformers import AutoTokenizer, DataCollatorForLanguageModeling
+from transformers import AutoTokenizer, DataCollatorForLanguageModeling, PreTrainedTokenizerFast
 
 from torchGB import GenomicBottleneck
 from _transformer import LanguageModel, predict_sequence, generate_square_subsequent_mask
 
-# os.environ["HTTP_PROXY"] = "https://pgi15-head1.iff.kfa-juelich.de:8880"
-# os.environ["HTTPS_PROXY"] = "https://pgi15-head1.iff.kfa-juelich.de:8880"
 
 parser = argparse.ArgumentParser()
 
@@ -59,6 +58,9 @@ parser.add_argument("--load_model", type=str, default=None,
                     help="Path to the model weights.")
 
 parser.add_argument("--wandb", type=str, default="run", help="Wandb mode.")
+
+parser.add_argument("--data_dir", type=str, default=None,
+                    help="Path to the dataset.")
 
 parser.add_argument("--disable_gnets", action="store_false",
                     help="Use genomic bottleneck compression?")
@@ -104,25 +106,29 @@ with open(os.path.join(os.getcwd(), "token"), "r") as f:
     token = f.read()
 
 print("Loading dataset...", file=sys.stdout)
-oscar_dataset = load_dataset("oscar-corpus/OSCAR-2301", 
-                            language=args.language, 
-                            split="train", 
-                            token=token, 
-                            trust_remote_code=True,
+
+train_dataset = load_dataset("arrow", 
+                            data_dir=args.data_dir, 
+                            split="train",
                             streaming=True)
 
-print("Loaded dataset", file=sys.stdout)
+val_dataset = train_dataset.take(1024)
+test_dataset = train_dataset.take(1024)
 
-tokenizer = AutoTokenizer.from_pretrained("gpt2", do_lower_case=False)
+# gpt2_tokenizer = AutoTokenizer.from_pretrained("gpt2", do_lower_case=False)
+
+# tk_tokenizer = Tokenizer.from_file("tokenizers/oscar_2301_en/tokenizer.json")
+# tokenizer = PreTrainedTokenizerFast(tokenizer_object=tk_tokenizer)
+# tokenizer.bos_token = gpt2_tokenizer.bos_token
+# tokenizer.eos_token = gpt2_tokenizer.eos_token
+# tokenizer.unk_token = gpt2_tokenizer.unk_token
+print("Loading tokenizer...", file=sys.stdout)
+tokenizer = AutoTokenizer.from_pretrained("/p/home/jusers/lohoff1/jureca/Projects/torchGB/experiments/language_modeling/tokenizers/oscar_2301_en")
 tokenizer.pad_token = tokenizer.eos_token
 
-M = 2 # TODO do something about this hardcoding and validation
-test_dataset = oscar_dataset.take(M*1024)
-validation_dataset = oscar_dataset.take(M*1024)
-# gather everyone if you want to have a single DatasetDict
 oscar_dataset = DatasetDict({"train": oscar_dataset,
                             "test": test_dataset,
-                            "validation": validation_dataset})
+                            "validation": val_dataset})
 
 
 # val_num_words = sum(len(line["text"].split(" ")) for line in oscar_dataset["validation"])
@@ -146,11 +152,11 @@ def tokenize_function(element):
 
 # Multiprocessing setup
 # dist.init_process_group(backend="nccl")
-# rank = dist.get_rank()
-# world_size = dist.get_world_size()
-rank          = int(os.environ["SLURM_PROCID"])
-world_size    = int(os.environ["WORLD_SIZE"])
-print(rank, world_size)
+rank = dist.get_rank()
+world_size = dist.get_world_size()
+# rank          = int(os.environ["SLURM_PROCID"])
+# world_size    = int(os.environ["WORLD_SIZE"])
+print(rank, world_size, file=sys.stdout)
 dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
 rm_cols = oscar_dataset["train"].column_names
@@ -174,6 +180,7 @@ embedding_dim = 64*num_heads # embedding dimension 512
 hidden_dim = 3072 # dimension of the feedforward network model in nn.TransformerEncoder
 num_layers = 12 # number of nn.TransformerEncoderLayer in nn.TransformerEncoder
 dropout = 0.1 # dropout probability
+print("Init model...", file=sys.stdout)
 model = LanguageModel(num_tokens, 
                     embedding_dim, 
                     num_heads, 

@@ -14,15 +14,16 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+from tokenizers import Tokenizer
 from datasets import load_dataset, DatasetDict
 from datasets.distributed import split_dataset_by_node
-from transformers import AutoTokenizer, DataCollatorForLanguageModeling
+from transformers import (AutoTokenizer, 
+                        PreTrainedTokenizerFast,
+                        DataCollatorForLanguageModeling)
 
 from torchGB import GenomicBottleneck
-from _transformer import LanguageModel, predict_sequence, generate_square_subsequent_mask
+from _transformer import GPT, predict_sequence, generate_square_subsequent_mask
 
-# os.environ["HTTP_PROXY"] = "https://pgi15-head1.iff.kfa-juelich.de:8880"
-# os.environ["HTTPS_PROXY"] = "https://pgi15-head1.iff.kfa-juelich.de:8880"
 
 parser = argparse.ArgumentParser()
 
@@ -58,6 +59,9 @@ parser.add_argument("--load_gnets", type=str, default=None,
 parser.add_argument("--load_model", type=str, default=None,
                     help="Path to the model weights.")
 
+parser.add_argument("--data_dir", type=str, default=None,
+                    help="Path to the dataset.")
+
 parser.add_argument("--wandb", type=str, default="run", help="Wandb mode.")
 
 parser.add_argument("--disable_gnets", action="store_false",
@@ -89,9 +93,10 @@ SEQ_LEN = args.seq_len+1
 LOG_INTERVAL = args.log_interval
 init_with_gnets = not args.init_with_gnets
 enable_gnets = args.disable_gnets if not init_with_gnets else False
+
 if init_with_gnets:
-    print(f"Initializing with gnets weights:{args.load_gnets}")
-    assert args.load_gnets is not None, "Please enter a path to the weights for the gnets."
+    print(f"Initializing with G-Net weights:{args.load_gnets}")
+    assert args.load_gnets is not None, "Please enter a path to the weights for the G-Nets."
 
 
 experiment_name = "GBT_" + args.name if enable_gnets else args.name
@@ -100,29 +105,35 @@ best_model = None
 
 print("Starting experiment", experiment_name, file=sys.stdout)
    
-with open(os.path.join(os.getcwd(), "token"), "r") as f:
-    token = f.read()
 
-print("Loading dataset...", file=sys.stdout)
-oscar_dataset = load_dataset("oscar-corpus/OSCAR-2301", 
-                            language=args.language, 
-                            split="train", 
-                            token=token, 
-                            trust_remote_code=True,
+# oscar_dataset = load_dataset("oscar-corpus/OSCAR-2301", 
+#                             language=args.language, 
+#                             split="train", 
+#                             token=token, 
+#                             trust_remote_code=True,
+#                             cache_dir="/Data/pgi-15/lohoff/hf_cache")
+
+train_dataset = load_dataset("arrow", 
+                            data_dir=args.data_dir, 
+                            split="train",
                             streaming=True)
 
-print("Loaded dataset", file=sys.stdout)
+val_dataset = train_dataset.take(1024)
+test_dataset = train_dataset.take(1024)
 
-tokenizer = AutoTokenizer.from_pretrained("gpt2", do_lower_case=False)
+gpt2_tokenizer = AutoTokenizer.from_pretrained("gpt2", do_lower_case=False)
+
+tk_tokenizer = Tokenizer.from_file("tokenizers/oscar_2301_en/tokenizer.json")
+tokenizer = PreTrainedTokenizerFast(tokenizer_object=tk_tokenizer)
+tokenizer.bos_token = gpt2_tokenizer.bos_token
+tokenizer.eos_token = gpt2_tokenizer.eos_token
+tokenizer.unk_token = gpt2_tokenizer.unk_token
 tokenizer.pad_token = tokenizer.eos_token
 
-M = 2 # TODO do something about this hardcoding and validation
-test_dataset = oscar_dataset.take(M*1024)
-validation_dataset = oscar_dataset.take(M*1024)
 # gather everyone if you want to have a single DatasetDict
-oscar_dataset = DatasetDict({"train": oscar_dataset,
+oscar_dataset = DatasetDict({"train": train_dataset,
                             "test": test_dataset,
-                            "validation": validation_dataset})
+                            "validation": val_dataset})
 
 
 # val_num_words = sum(len(line["text"].split(" ")) for line in oscar_dataset["validation"])
@@ -174,15 +185,15 @@ embedding_dim = 64*num_heads # embedding dimension 512
 hidden_dim = 3072 # dimension of the feedforward network model in nn.TransformerEncoder
 num_layers = 12 # number of nn.TransformerEncoderLayer in nn.TransformerEncoder
 dropout = 0.1 # dropout probability
-model = LanguageModel(num_tokens, 
-                    embedding_dim, 
-                    num_heads, 
-                    hidden_dim, 
-                    num_layers, 
-                    dropout,
-                    tie_weights=args.tie_weights).to(rank)
+model = GPT(SEQ_LEN-1,
+            num_tokens, 
+            embedding_dim, 
+            num_heads, 
+            hidden_dim, 
+            num_layers, 
+            dropout,
+            tie_weights=args.tie_weights).to(rank)
 model = DDP(model, device_ids=[rank], output_device=rank)
-
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=LR)
@@ -197,6 +208,7 @@ if args.load_model is not None:
         print("No model existing under", args.load_model)
 else:
     scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
+
 
 train_loader = DataLoader(train_data, 
                         pin_memory=True,
@@ -246,10 +258,9 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             cur_loss = cur_loss.cpu().item()
             ppl = np.exp(cur_loss)
             predicted_seq = predict_sequence("Who invented the car?", 
-                                                tokenizer, model, rank, seq_size=32)
+                                            tokenizer, model, rank, seq_size=32)
             if rank == 0:
-                wandb.log({"train_loss": cur_loss, 
-                            "train ppl": ppl})
+                wandb.log({"train_loss": cur_loss, "train ppl": ppl})
                 print("-" * 89)
                 print(predicted_seq)
                 print("-" * 89)
@@ -273,8 +284,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             print(f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | "
                 f"valid loss {float(val_loss):5.2f} | valid ppl {val_ppl:8.2f}")
             if rank == 0:
-                wandb.log({"validation_loss": val_loss, 
-                            "val ppl": val_ppl})
+                wandb.log({"validation_loss": val_loss, "val ppl": val_ppl})
 
             global best_val_loss
             if val_loss < best_val_loss:
@@ -287,7 +297,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 fname += "_"  + args.language + ".pth"
                 
                 if enable_gnets:
-                    print("Saving gnet weights under", fname)
+                    print("Saving G-Net weights under", fname)
                     gnets.save(fname) 
                 
                 if args.checkpoint_model:
@@ -316,7 +326,7 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
 # Loop over epochs. Save the model if the validation loss is the best
 # we've seen so far. Adjust the learning rate after each epoch.
 # , "6", "7", "8", "9", "10", "11"
-ignore_layers = ["encoder.weight", "decoder.weight", "norm", "bias", "6", "7", "8", "9", "10", "11"]
+ignore_layers = ["encoder.weight", "pos_encoder.weight", "decoder.weight", "norm", "bias"]
 gnets = GenomicBottleneck(model, COMPRESSION_LAYER_SIZE, ignore_layers=ignore_layers) if (enable_gnets or init_with_gnets) else None
 
 if args.load_gnets is not None:
@@ -325,13 +335,13 @@ if args.load_gnets is not None:
         gnets.predict_weights(model)
         val_ppl = evaluate(model, val_loader)
         print("val_ppl", np.exp(val_ppl.cpu().item()))
-        print("Loaded gnet weights from", args.load_gnets)
+        print("Loaded G-Net weights from", args.load_gnets)
     except:
         print("No G-Net existing under", args.load_gnets)
     
 if init_with_gnets:
     gnets.predict_weights(model)
-    print("Initial performance with gnet init:")
+    print("Initial performance with G-Net init:")
     val_ppl = evaluate(model, val_loader)
     test_ppl = evaluate(model, test_loader)
     print(f"Validation ppl: {np.exp(val_ppl)}\n"

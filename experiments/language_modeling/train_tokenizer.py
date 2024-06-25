@@ -7,7 +7,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--language", type=str, 
                     default="en", help="What language to use.")
 parser.add_argument("--vocab_size", type=int, 
-                    default=50265, help="Size of the vocabulary.")
+                    default=50257, help="Size of the vocabulary.")
+parser.add_argument("--path", type=str, help="Path to data.")
 args = parser.parse_args()
 
 gpt2_tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -15,12 +16,11 @@ gpt2_tokenizer = AutoTokenizer.from_pretrained("gpt2")
 with open("./token", "r") as f:
     token = f.read()
 
-oscar_dataset = load_dataset("oscar-corpus/OSCAR-2301", 
-                            language=args.language, 
-                            split="train", 
-                            token=token, 
-                            trust_remote_code=True,
-                            streaming=True)
+# data_dir="/Data/pgi-15/lohoff/hf_cache/text/default-b680ec0519013fd8/0.0.0/96636a050ef51804b84abbfd4f4ad440e01153c24b86293eb5c3b300a41f9101",
+
+oscar_dataset = load_dataset("arrow",
+                            data_dir=args.path,
+                            split="train")
 
 def batch_iterator(batch_size=1000):
     batch = []
