@@ -101,8 +101,6 @@ experiment_name = "GBT_" + args.name if enable_gnets else args.name
 best_val_loss = float("inf")
 best_model = None
    
-with open("./token", "r") as f:
-    token = f.read()
 
 # oscar_dataset = load_dataset("oscar-corpus/OSCAR-2301", 
 #                             language=args.language, 
@@ -203,6 +201,7 @@ if args.load_model is not None:
         print("No model existing under", args.load_model)
 else:
     scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
+
 
 train_loader = DataLoader(train_data, 
                         pin_memory=True,
