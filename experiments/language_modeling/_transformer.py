@@ -42,8 +42,9 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class LanguageModel(nn.Module):
+class GPT(nn.Module):
     def __init__(self, 
+                seq_len: int,
                 num_tokens: int, 
                 embedding_dim: int, 
                 num_heads: int, 
@@ -53,6 +54,7 @@ class LanguageModel(nn.Module):
                 tie_weights: bool = True) -> None:
         super().__init__()
         self.pos_encoder = PositionalEncoding(embedding_dim, dropout)
+        self.dropout = nn.Dropout(dropout)
         encoder_layers = TransformerEncoderLayer(embedding_dim, 
                                                 num_heads, 
                                                 hidden_dim, 
@@ -114,13 +116,11 @@ class LanguageModel(nn.Module):
 def generate_sequence(model, sequence, device, seq_size=32):       
     sequence = sequence.unsqueeze(0)
     src_mask = generate_square_subsequent_mask(seq_size+sequence.size(1))
-    generate_step = 0
-    while generate_step < seq_size:
+    for _ in range(seq_size):
         _src_mask = src_mask[:sequence.size(1), :sequence.size(1)].to(device)
         output_word = torch.argmax(model(sequence, _src_mask)[-1, :], dim=1)[-1:]
         output_word = output_word.unsqueeze(0)
         sequence = torch.cat((sequence, output_word), dim=1)
-        generate_step += 1
     sequence = sequence.squeeze(0)
     return sequence
 
