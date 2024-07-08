@@ -77,6 +77,9 @@ parser.add_argument("--lr", type=float, default=2.5e-4,
 parser.add_argument("--tie_weights", action="store_true",
                     help="Whether tie the embedding and decoder weights.")
 
+parser.add_argument("--prompt", type=str, default="Who invented the car?",
+		    help="The trial prompt that is fed to the LLM during training.")
+
 args = parser.parse_args()
 
 import sys
@@ -201,6 +204,8 @@ else:
 train_loader = DataLoader(train_data, 
                         pin_memory=True,
                         batch_size=BATCHSIZE,
+			num_workers=2,
+			prefetch_factor=2,
                         collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
 val_loader = DataLoader(val_data,
                         pin_memory=True, 
@@ -245,7 +250,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             dist.all_reduce(cur_loss, op=dist.ReduceOp.AVG)
             cur_loss = cur_loss.cpu().item()
             ppl = np.exp(cur_loss)
-            predicted_seq = predict_sequence("Who invented the car?", 
+            predicted_seq = predict_sequence(args.prompt, 
                                                 tokenizer, model, rank, seq_size=32)
             if rank == 0:
                 wandb.log({"train_loss": cur_loss, 
