@@ -1,3 +1,4 @@
+import time
 from typing import Dict, Optional, Sequence
 from dataclasses import dataclass
 
@@ -76,6 +77,10 @@ class GenomicBottleneck(nn.Module):
                                       
         for pname, param in model.named_parameters():            
             ignore_layer = any([layer_name in pname for layer_name in ignore_layers])
+            # if "linear" in pname and dist.get_rank() == 0:
+                # print(pname, ignore_layer)
+                # print(ignore_layer)
+                # print({str(layer_name):str(layer_name in pname) for layer_name in ignore_layers})
             if param.requires_grad and not ignore_layer:
                 # This implements a rudimentary load balancer across devices
                 # that removes the bias towards the first device
@@ -109,6 +114,12 @@ class GenomicBottleneck(nn.Module):
                             row_col_encoding, gnet = conv2d_gnet_layer(param_shape, 
                                                                         hidden_dim,
                                                                         output_scale)
+                    elif "in_proj_weight" in pname:
+                        print("Param", param_shape)
+                        row_col_encoding, gnet = default_gnet_layer(param_shape, 
+                                                                    hidden_dim,
+                                                                    output_scale)
+                    
                     else:                        
                         if param.data.ndim == 2:
                             # Treat 2D weight as fully connected
@@ -199,7 +210,8 @@ class GenomicBottleneck(nn.Module):
         checkpoint = {}
 
         for rank in range(dist.get_world_size()):
-            if rank > 0:
+            dist.barrier()
+            if rank > 0 and dist.get_rank() == rank:
                 checkpoint = torch.load(fname, map_location=torch.device("cpu"))
             dist.barrier()
             for name in self.gnetdict.keys():
@@ -211,6 +223,8 @@ class GenomicBottleneck(nn.Module):
                     checkpoint[optimizer_name] = self.gnetdict[name].optimizer.state_dict()
             if dist.get_rank() == rank:
                 torch.save(checkpoint, fname)
+            else:
+                time.sleep(1)
             dist.barrier()
                       
     def load(self, fname: str) -> None:
@@ -226,9 +240,9 @@ class GenomicBottleneck(nn.Module):
             if self.gnetdict[name].rank == dist.get_rank():        
                 entry_name = name + "_state_dict"
                 model_name = "model_" + entry_name
-                optimizer_name = "optimizer_" + entry_name            
+                optimizer_name = "optimizer_" + entry_name         
                 self.gnetdict[name].gnet.load_state_dict(checkpoint[model_name])
-                self.gnetdict[name].optimizer.load_state_dict(checkpoint[optimizer_name])
+                self.gnetdict[name].optimizer.load_state_dict(checkpoint[optimizer_name]) 
 
     def train(self) -> None:
         for name in self.gnetdict.keys():

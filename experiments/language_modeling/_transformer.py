@@ -113,13 +113,19 @@ class GPT(nn.Module):
         return self.decoder(src)
     
 
-def generate_sequence(model, sequence, device, seq_size=32):       
+def generate_sequence(model, sequence, device, seq_size=32, k=20, temperature=0.9):       
     sequence = sequence.unsqueeze(0)
     src_mask = generate_square_subsequent_mask(seq_size+sequence.size(1))
     for _ in range(seq_size):
         _src_mask = src_mask[:sequence.size(1), :sequence.size(1)].to(device)
-        output_word = torch.argmax(model(sequence, _src_mask)[-1, :], dim=1)[-1:]
-        output_word = output_word.unsqueeze(0)
+        # output_word = torch.argmax(model(sequence, _src_mask)[-1, :], dim=1)[-1:]
+        with torch.no_grad():
+            logits = model(sequence, _src_mask)[0, -1, :]
+            topk = torch.topk(logits, k)
+            topk_probs = F.softmax(topk.values / temperature, dim=0)
+            output_word = topk.indices[torch.multinomial(topk_probs, 1)]
+            output_word = output_word.unsqueeze(0)
+        
         sequence = torch.cat((sequence, output_word), dim=1)
     sequence = sequence.squeeze(0)
     return sequence

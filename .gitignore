@@ -58,6 +58,7 @@ MANIFEST
 *.pth
 *.zst
 **/wandb/
+**/wandb_jureca/
 **/plots/
 *.pt
 *.pth
