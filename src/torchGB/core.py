@@ -77,10 +77,6 @@ class GenomicBottleneck(nn.Module):
                                       
         for pname, param in model.named_parameters():            
             ignore_layer = any([layer_name in pname for layer_name in ignore_layers])
-            # if "linear" in pname and dist.get_rank() == 0:
-                # print(pname, ignore_layer)
-                # print(ignore_layer)
-                # print({str(layer_name):str(layer_name in pname) for layer_name in ignore_layers})
             if param.requires_grad and not ignore_layer:
                 # This implements a rudimentary load balancer across devices
                 # that removes the bias towards the first device
@@ -113,13 +109,7 @@ class GenomicBottleneck(nn.Module):
                         if "weight" in pname:
                             row_col_encoding, gnet = conv2d_gnet_layer(param_shape, 
                                                                         hidden_dim,
-                                                                        output_scale)
-                    elif "in_proj_weight" in pname:
-                        print("Param", param_shape)
-                        row_col_encoding, gnet = default_gnet_layer(param_shape, 
-                                                                    hidden_dim,
-                                                                    output_scale)
-                    
+                                                                        output_scale)                    
                     else:                        
                         if param.data.ndim == 2:
                             # Treat 2D weight as fully connected

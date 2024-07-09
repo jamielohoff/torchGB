@@ -56,6 +56,7 @@ MANIFEST
 # Project-specific ignores
 *.pt
 *.pth
+*.yaml
 *.zst
 **/wandb/
 **/wandb_jureca/

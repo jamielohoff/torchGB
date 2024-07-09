@@ -21,21 +21,20 @@ from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 
 from torchGB import GenomicBottleneck
 from _transformer import GPT, predict_sequence, generate_square_subsequent_mask
-
+from config import load_base_config
 
 parser = argparse.ArgumentParser()
 
+parser.add_argument("--gpus", type=str, default="0", help="Which GPUs to use.")
+
+parser.add_argument("--seed", type=int, default=0, help="Random seed of the experiment.")
+
 parser.add_argument("--name", type=str, default="Test", help="Name of the experiment.")
-
-parser.add_argument("--gpus", type=str, default="all", help="Which GPUS to use.")
-
-parser.add_argument("--dataset", type=str, default="oscar2301", 
-                    help="Name of the language dataset.")
 
 parser.add_argument("--language", type=str, default="en", help="Which language to use.")
 
 parser.add_argument("--epochs", type=int,
-                    default=50, help="Number of training epochs.")
+                    default=1, help="Number of training epochs.")
 
 parser.add_argument("--batchsize", type=int, default=64, help="Training batchsize.")
 
@@ -89,7 +88,17 @@ parser.add_argument("--prompt", type=str, default="Hello World!",
 parser.add_argument("--transfer_layers", type=str, default="",
                     help="Which layers to transfer from the loaded model.")
 
+parser.add_argument("--tokenizer_path", type=str, 
+                    default="/Users/grieser/Projects/torchGB/experiments/language_modeling/tokenizers/",
+                    help="Path to the tokenizer.")
+
+parser.add_argument("--wandb_path", type=str, 
+                    default="/Users/grieser/Projects/torchGB/experiments/language_modeling/wandb",
+                    help="Path to the wandb directory.")
+
 args = parser.parse_args()
+
+torch.manual_seed(args.seed)
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -102,6 +111,12 @@ SEQ_LEN = args.seq_len+1
 LOG_INTERVAL = args.log_interval
 init_with_gnets = not args.init_with_gnets
 enable_gnets = args.disable_gnets if not init_with_gnets else False
+
+
+base_config = load_base_config("base_config.yaml")
+prefix = base_config["data_dirs"]["prefix"]
+data_dir = prefix + base_config["data_dirs"][args.language]
+print("Data directory:", data_dir)
 
 if init_with_gnets:
     print(f"Initializing with G-Net weights:{args.load_gnets}")
@@ -122,15 +137,16 @@ print("Starting experiment", experiment_name, file=sys.stdout)
 #                             cache_dir="/Data/pgi-15/lohoff/hf_cache")
 
 train_dataset = load_dataset("arrow", 
-                            data_dir=args.data_dir, 
+                            data_dir=data_dir, 
                             split="train",
                             streaming=True)
 
 val_dataset = train_dataset.take(args.val_test_mult*1024)
 test_dataset = train_dataset.take(args.val_test_mult*1024)
 
-print("Loading tokenizer...", file=sys.stdout)
-tokenizer = AutoTokenizer.from_pretrained("/Users/grieser/Projects/torchGB/experiments/language_modeling/tokenizers/oscar_2301_" + args.language)
+print("Loading tokenizer...")
+tokenizer_path = os.path.join(base_config["tokenizer_path"], "oscar_2301_" + args.language)
+tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 tokenizer.pad_token = tokenizer.eos_token
 
 # gather everyone if you want to have a single DatasetDict
@@ -262,13 +278,10 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         data = data["input_ids"].to(rank)
         optimizer.zero_grad()
 
-        # if rank == 0: print("before", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight)
-        # if rank == 3: print(gnets.gnetdict["module.transformer_encoder.layers.0.self_attn.in_proj_weight"].gnet.layers[0].weight)
         if enable_gnets:
             gnets.zero_grad()
             gnets.predict_weights(model)
-        # if rank == 0: print("after", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight)
-        
+
         output = model(data[:, :-1], src_mask)
         loss = criterion(output.view(-1, num_tokens), data[:, 1:].reshape(-1))
 
@@ -358,9 +371,8 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
 
 # Loop over epochs. Save the model if the validation loss is the best
 # we've seen so far. Adjust the learning rate after each epoch.
-# , "4", "5", "6", "7", "8", "9", "10", "11"
 ignore_layers = ["encoder.weight", "decoder.weight", "norm", "bias"]
-ignore_layers += args.ignore_layers.split(",")
+ignore_layers += [f".{l}." for l in args.ignore_layers.split(",")]
 print("Ignoring layers:", ignore_layers)
 gnets = GenomicBottleneck(model, 
                         COMPRESSION_LAYER_SIZE, 
@@ -405,7 +417,8 @@ run_config = {"epochs": EPOCHS,
                 "compression_factor": compression_factor,
                 "num_params": num_params,
                 "weight_tying": args.tie_weights,
-                "ignored layers": args.ignore_layers}
+                "ignored layers": args.ignore_layers,
+                "seed": args.seed}
 
 print("Computing initial validation loss...")
 val_loss = evaluate(model, val_loader)
@@ -416,9 +429,13 @@ print("Validation loss:", val_loss, "Validation PPL:", val_ppl)
 if rank == 0:
     wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
                 host="https://wandb.fz-juelich.de")
-    wandb.init(entity="ja-lohoff", project="GenomicBottleneck", 
-                group="oscar", config=run_config, mode=args.wandb)
-    wandb.run.name = experiment_name + "_" + args.dataset + "_" + args.language
+    wandb.init(entity="ja-lohoff", 
+                project="GenomicBottleneck", 
+                group="oscar", 
+                config=run_config, 
+                mode=args.wandb,
+                dir=base_config["wandb_path"])
+    wandb.run.name = experiment_name + "_" + args.language
     wandb.log({"validation_loss": val_loss, "val ppl": val_ppl})
     
 
