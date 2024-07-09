@@ -336,9 +336,9 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 global best_model
                 best_model = copy.deepcopy(model).cpu()
                 
-                fname = os.path.join(os.getcwd(), "weights/")
-                fname += experiment_name + "_gnets_" + args.dataset
-                fname += "_"  + args.language + ".pth"
+                pth = base_config["save_gnets"]
+                fname = experiment_name + "_gnets_" + args.language + ".pth"
+                fname = os.path.join(pth, fname)
                 
                 if enable_gnets:
                     print("Saving G-Net weights under", fname)
