@@ -85,5 +85,12 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale):
     gnet_sizes = (num_inputs, hidden_dim, hidden_dim//2, 1)
     gnet = GenomicBottleNet(gnet_sizes, output_scale=output_scale)
     return row_col_encoding, gnet
+
+
+def qkv_gnet_layer(param_shape, hidden_dim, output_scale):
+    # Subdivide the attention weight matrix in three similar parts Wq, Wk, Wv
+    param_shape = (param_shape[0]//3, param_shape[1])
+    encodings_layers = [default_gnet_layer(param_shape, hidden_dim, output_scale) for _ in range(3)]
+    return zip(*encodings_layers)
     
     

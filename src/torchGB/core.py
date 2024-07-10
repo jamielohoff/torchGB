@@ -11,7 +11,7 @@ import torch.distributed as dist
 from torch import Tensor
 
 from .utils import find_layer
-from .gnet import GenomicBottleNet, conv2d_gnet_layer, default_gnet_layer
+from .gnet import GenomicBottleNet, conv2d_gnet_layer, default_gnet_layer, qkv_gnet_layer
 from .lamb import Lamb
 
 
@@ -109,7 +109,17 @@ class GenomicBottleneck(nn.Module):
                         if "weight" in pname:
                             row_col_encoding, gnet = conv2d_gnet_layer(param_shape, 
                                                                         hidden_dim,
-                                                                        output_scale)                    
+                                                                        output_scale)    
+                    elif "in_proj_weight" in pname:
+                        print("QKV layer weights")
+                        row_col_encoding, gnet = default_gnet_layer(param_shape, 
+                                                                    hidden_dim,
+                                                                    output_scale)  
+                        # row_col_encodings, gnets = qkv_gnet_layer(param_shape, 
+                        # hidden_dim, output_scale)
+                        # print(row_col_encodings)
+                        # print(gnets)
+                                    
                     else:                        
                         if param.data.ndim == 2:
                             # Treat 2D weight as fully connected

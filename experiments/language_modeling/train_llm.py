@@ -33,13 +33,12 @@ parser.add_argument("--name", type=str, default="Test", help="Name of the experi
 
 parser.add_argument("--language", type=str, default="en", help="Which language to use.")
 
-parser.add_argument("--epochs", type=int,
-                    default=1, help="Number of training epochs.")
+parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs.")
 
 parser.add_argument("--batchsize", type=int, default=64, help="Training batchsize.")
 
-parser.add_argument("--seq_len", type=int, 
-                    default=512, help="Context length of the transformer.")
+parser.add_argument("--seq_len", type=int, default=512, 
+                    help="Context length of the transformer.")
 
 parser.add_argument("--log_interval", type=int, 
                     default=100, help="Logging every n batches.")
@@ -55,9 +54,6 @@ parser.add_argument("--load_gnets", type=str, default=None,
 
 parser.add_argument("--load_model", type=str, default=None,
                     help="Path to the model weights.")
-
-parser.add_argument("--data_dir", type=str, default=None,
-                    help="Path to the dataset.")
 
 parser.add_argument("--wandb", type=str, default="run", help="Wandb mode.")
 
@@ -88,14 +84,6 @@ parser.add_argument("--prompt", type=str, default="Hello World!",
 parser.add_argument("--transfer_layers", type=str, default="",
                     help="Which layers to transfer from the loaded model.")
 
-parser.add_argument("--tokenizer_path", type=str, 
-                    default="/Users/grieser/Projects/torchGB/experiments/language_modeling/tokenizers/",
-                    help="Path to the tokenizer.")
-
-parser.add_argument("--wandb_path", type=str, 
-                    default="/Users/grieser/Projects/torchGB/experiments/language_modeling/wandb",
-                    help="Path to the wandb directory.")
-
 args = parser.parse_args()
 
 torch.manual_seed(args.seed)
@@ -118,6 +106,7 @@ prefix = base_config["data_dirs"]["prefix"]
 data_dir = prefix + base_config["data_dirs"][args.language]
 print("Data directory:", data_dir)
 
+
 if init_with_gnets:
     print(f"Initializing with G-Net weights:{args.load_gnets}")
     assert args.load_gnets is not None, "Please enter a path to the weights for the G-Nets."
@@ -138,18 +127,24 @@ print("Starting experiment", experiment_name, file=sys.stdout)
 
 train_dataset = load_dataset("arrow", 
                             data_dir=data_dir, 
-                            split="train",
-                            streaming=True)
+                            split="train[:90%]",
+                            num_proc=8)
 
-val_dataset = train_dataset.take(args.val_test_mult*1024)
-test_dataset = train_dataset.take(args.val_test_mult*1024)
+val_dataset = load_dataset("arrow", 
+                            data_dir=data_dir, 
+                            split="train[90%:95%]",
+                            num_proc=4)
+
+test_dataset = load_dataset("arrow", 
+                            data_dir=data_dir, 
+                            split="train[95%:]",
+                            num_proc=4)
 
 print("Loading tokenizer...")
 tokenizer_path = os.path.join(base_config["tokenizer_path"], "oscar_2301_" + args.language)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 tokenizer.pad_token = tokenizer.eos_token
 
-# gather everyone if you want to have a single DatasetDict
 oscar_dataset = DatasetDict({"train": train_dataset,
                             "test": test_dataset,
                             "validation": val_dataset})
@@ -309,8 +304,8 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 print(predicted_seq)
                 print("-" * 89)
                 print(f"| epoch {epoch:3d} | {batch:5d} batches | "
-                  f"ms/batch {ms_per_batch:5.2f} | "
-                  f"loss {cur_loss:5.2f} | ppl {ppl:8.2f}")
+                        f"ms/batch {ms_per_batch:5.2f} | "
+                        f"loss {cur_loss:5.2f} | ppl {ppl:8.2f}")
             dist.barrier()
             
             total_loss = 0
@@ -321,12 +316,10 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             val_loss = evaluate(model, val_loader)
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
             val_ppl = np.exp(val_loss.cpu().item()) # Word-level PPL -- use 
-            elapsed = time.time() - epoch_start_time
 
             print("-" * 89)
             print("Validation of joint P-Net and G-Net training:")
-            print(f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | "
-                f"valid loss {float(val_loss):5.2f} | valid ppl {val_ppl:8.2f}")
+            print(f"valid loss {float(val_loss):5.2f} | valid ppl {val_ppl:8.2f}")
             if rank == 0:
                 wandb.log({"validation_loss": val_loss, "val ppl": val_ppl})
 
@@ -439,11 +432,7 @@ if rank == 0:
     wandb.log({"validation_loss": val_loss, "val ppl": val_ppl})
     
 
-
 for epoch in range(1, EPOCHS + 1):
-    epoch_start_time = time.time()
-    train_data.set_epoch(epoch)
-    val_data.set_epoch(epoch)
     dist.barrier()
     print("New epoch...")
     train(model, gnets)

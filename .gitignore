@@ -54,6 +54,7 @@ MANIFEST
 .python-version
 
 # Project-specific ignores
+sync_wandb.sh
 *.pt
 *.pth
 *.yaml
