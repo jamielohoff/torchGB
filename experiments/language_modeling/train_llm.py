@@ -15,7 +15,7 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from datasets import load_dataset, DatasetDict
+from datasets import load_dataset
 from datasets.distributed import split_dataset_by_node
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 
@@ -106,24 +106,22 @@ if init_with_gnets:
     print(f"Initializing with G-Net weights: {args.load_gnets}")
     assert args.load_gnets is not None, "Please enter a path to the weights for the G-Nets."
 experiment_name = "GBT_" + args.name if enable_gnets else args.name
-print("Starting experiment", experiment_name, file=sys.stdout)
+print("Starting experiment", experiment_name)
 
 
 # Load and create datasets
 train_dataset = load_dataset("arrow", 
                             data_dir=data_dir, 
-                            split="train[:94%]",
-                            num_proc=8)
+                            split="train[:94%]")
 
 val_dataset = load_dataset("arrow", 
                             data_dir=data_dir, 
-                            split="train[94%:95%]",
-                            num_proc=4)
+                            split="train[94%:95%]")
 
 test_dataset = load_dataset("arrow", 
                             data_dir=data_dir, 
-                            split="train[95%:]",
-                            num_proc=4)
+                            split="train[95%:]")
+
 
 # val_num_words = sum(len(line["text"].split(" ")) for line in oscar_dataset["validation"])
 # test_num_words = sum(len(line["text"].split(" ")) for line in oscar_dataset["test"])
@@ -179,20 +177,18 @@ else:
 
 
 # Creating dataloaders
-def get_dataloader(dataset, rank, world_size):
-    # data = dataset.map(tokenize_function, batched=True, remove_columns=rm_cols)
+def get_dataloader(dataset, rank, world_size, num_workers=1, prefetch_factor=1):
     node_data = split_dataset_by_node(dataset, rank=rank, world_size=world_size)
     dataloader = DataLoader(node_data, 
                             pin_memory=True,
                             batch_size=BATCHSIZE,
-                            # num_workers=4,
-                            # prefetch_factor=2,
-                            collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
+                            num_workers=num_workers,
+                            prefetch_factor=prefetch_factor)
     return dataloader
 
-train_loader = get_dataloader(train_dataset, rank, world_size)
-val_loader = get_dataloader(val_dataset, rank, world_size)
-test_loader = get_dataloader(test_dataset, rank, world_size)
+train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=8, prefetch_factor=2)
+val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=4, prefetch_factor=2)
+test_loader = get_dataloader(test_dataset, rank, world_size, num_workers=4, prefetch_factor=2)
 
 
 # Other stuff that is required
@@ -207,7 +203,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     pbar = enumerate(tqdm(train_loader))
     for batch, data in pbar:
         model.train()
-        data = data["input_ids"].to(rank)
+        data = torch.stack(data["input_ids"]).t().to(rank)
         optimizer.zero_grad()
 
         if enable_gnets:
@@ -224,10 +220,10 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         dist.barrier()
         optimizer.step()
         if scheduler is not None: scheduler.step()
-
         if enable_gnets: gnets.step()
         
         total_loss += loss.item()
+        # Logging
         if batch % LOG_INTERVAL == 0 and batch > 0:
             ms_per_batch = (time.time() - start_time) * 1000 / LOG_INTERVAL
             cur_loss = torch.tensor([total_loss / LOG_INTERVAL]).to(rank)
@@ -249,8 +245,8 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             total_loss = 0
             start_time = time.time()
         
+        # Validation
         if batch % VAL_INTERVAL == 0 and batch > 0:
-            # We do not train on the entire dataset per epoch...
             val_loss = evaluate(model, val_loader)
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
             val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
@@ -290,18 +286,19 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
     total_loss, norm = 0, 0
     global src_mask
     with torch.no_grad():
-        for data in tqdm(eval_loader):
+        start_time = time.time()
+        for data in eval_loader:
             data = data["input_ids"].to(rank)
             seq_len = data.size(1)
             output = model(data[:, :-1], src_mask[:seq_len, :seq_len])
             output_flat = output.view(-1, tokenizer.vocab_size)
             total_loss += criterion(output_flat, data[:, 1:].reshape(-1)).item()
             norm += 1
+    print("Validation time:", time.time() - start_time)
     return torch.tensor([total_loss / norm]).to(rank)
 
 
-# Loop over epochs. Save the model if the validation loss is the best
-# we've seen so far. Adjust the learning rate after each epoch.
+# Loop over epochs. Save the model if the validation loss is the best we've seen so far.
 ignore_layers = ["encoder.weight", "decoder.weight", "norm", "bias"]
 ignore_layers += [f".{l}." for l in args.ignore_layers.split(",")]
 print("Ignoring layers:", ignore_layers)
@@ -371,7 +368,7 @@ if rank == 0:
                     id=args.wandb_id,
                     resume="allow",
                     name=run_name)
-    
+
     run.log({"validation_loss": val_loss, "val ppl": val_ppl})
     
 
