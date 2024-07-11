@@ -9,6 +9,9 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer, Transformer
 def generate_square_subsequent_mask(sz: int):
     """
     Generates an upper-triangular matrix of -inf, with zeros on diag.
+    
+    Args:
+        `sz` (int): Size of the square matrix.
     """
     return torch.triu(torch.ones(sz, sz) * float("-inf"), diagonal=1)
 
@@ -21,9 +24,9 @@ class PositionalEncoding(nn.Module):
     Here, we use ``sine`` and ``cosine`` functions of different frequencies.
 
     Args:
-        - d_model (int): the number of expected features in the input (required).
-        - dropout (float): the dropout value (default=0.1).
-        - max_len (int): the maximum length of the input sequences (default=5000).
+        `d_model` (int): the number of expected features in the input (required).
+        `dropout` (float): the dropout value (default=0.1).
+        `max_len` (int): the maximum length of the input sequences (default=5000).
     """
 
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
@@ -43,13 +46,31 @@ class PositionalEncoding(nn.Module):
 
 
 class GPT(nn.Module):
+    """
+    Simple implementation of a GPT/GPT2 model with weight
+    tying and positional encoding. Weight tying significantly reduces
+    the used numner of parameters in the model, while the positional encoding is
+    used instead of the learned positional embeddings to be able to transfer
+    weights and use G-Nets across different language tasks.
+
+    Args:
+        `seq_len` (int): Context window size.
+        `vocab_size` (int): Size of the vocabulary.
+        `embedding_dim` (int): Dimension of the Q,K,V embeddings.
+        `num_heads` (int): Number of attention heads.
+        `ff_dim` (int): Dimension of the feed-forward MLP.
+        `num_layers` (int): Number of transformer layers.
+        `dropout` (float): Dropout rate.
+        `tie_weights` (bool): Whether to tie the weights of 
+            the decoder and the embedding layer.
+    """
     def __init__(self, 
-                seq_len: int,
-                num_tokens: int, 
-                embedding_dim: int, 
-                num_heads: int, 
-                hidden_dim: int,
-                num_layers: int, 
+                seq_len: int = 512,
+                vocab_size: int = 50257, 
+                embedding_dim: int = 768, 
+                num_heads: int = 12, 
+                ff_dim: int = 3072,
+                num_layers: int = 12, 
                 dropout: float = 0.1,
                 tie_weights: bool = True) -> None:
         super().__init__()
@@ -57,16 +78,16 @@ class GPT(nn.Module):
         self.dropout = nn.Dropout(dropout)
         encoder_layers = TransformerEncoderLayer(embedding_dim, 
                                                 num_heads, 
-                                                hidden_dim, 
+                                                ff_dim, 
                                                 dropout,
                                                 norm_first=False,
                                                 batch_first=True, 
                                                 activation=F.gelu)
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers)
-        self.encoder = nn.Embedding(num_tokens, embedding_dim)
+        self.encoder = nn.Embedding(vocab_size, embedding_dim)
         self.embedding_dim = torch.tensor([embedding_dim])
         self.layer_norm = nn.LayerNorm(embedding_dim)
-        self.decoder = nn.Linear(embedding_dim, num_tokens, bias=False)
+        self.decoder = nn.Linear(embedding_dim, vocab_size, bias=False)
         
         self.apply(self.init_weights)
         if tie_weights:
@@ -101,8 +122,8 @@ class GPT(nn.Module):
     def forward(self, src: Tensor, src_mask: Tensor) -> Tensor:
         """
         Args:
-            src: Tensor, shape [seq_len, batch_size]
-            src_mask: Tensor, shape [seq_len, seq_len]
+            `src`: Tensor, shape [seq_len, batch_size]
+            `src_mask`: Tensor, shape [seq_len, seq_len]
         Returns:
             output Tensor of shape [seq_len, batch_size, ntoken]
         """
