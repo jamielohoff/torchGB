@@ -69,6 +69,7 @@ parser.add_argument("--transfer_layers", type=str, default="",
 
 args = parser.parse_args()
 
+
 # Setup of global variables
 torch.manual_seed(args.seed)
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
@@ -107,12 +108,6 @@ if init_with_gnets:
 experiment_name = "GBT_" + args.name if enable_gnets else args.name
 print("Starting experiment", experiment_name, file=sys.stdout)
 
-# oscar_dataset = load_dataset("oscar-corpus/OSCAR-2301", 
-#                             language=args.language, 
-#                             split="train", 
-#                             token=token, 
-#                             trust_remote_code=True,
-#                             cache_dir="/Data/pgi-15/lohoff/hf_cache")
 
 # Load and create datasets
 train_dataset = load_dataset("arrow", 
@@ -142,25 +137,14 @@ tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 tokenizer.pad_token = tokenizer.eos_token
 
 
-def get_dataloader(dataset, rank, world_size):
-    # data = dataset.map(tokenize_function, batched=True, remove_columns=rm_cols)
-    node_data = split_dataset_by_node(dataset, rank=rank, world_size=world_size)
-    dataloader = DataLoader(node_data, 
-                            pin_memory=True,
-                            batch_size=BATCHSIZE,
-                            # num_workers=4,
-                            # prefetch_factor=2,
-                            collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
-    return dataloader
-
-
-print("Init model...")
+# Initialize the model and optimizers
 model = GPT(**experiment_config["model"]).to(rank)
 model = DDP(model, device_ids=[rank], output_device=rank)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
 scheduler = None
+
 
 # Dealing with custom model loading
 if args.load_model is not None:
@@ -195,11 +179,23 @@ else:
 
 
 # Creating dataloaders
+def get_dataloader(dataset, rank, world_size):
+    # data = dataset.map(tokenize_function, batched=True, remove_columns=rm_cols)
+    node_data = split_dataset_by_node(dataset, rank=rank, world_size=world_size)
+    dataloader = DataLoader(node_data, 
+                            pin_memory=True,
+                            batch_size=BATCHSIZE,
+                            # num_workers=4,
+                            # prefetch_factor=2,
+                            collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False))
+    return dataloader
+
 train_loader = get_dataloader(train_dataset, rank, world_size)
 val_loader = get_dataloader(val_dataset, rank, world_size)
 test_loader = get_dataloader(test_dataset, rank, world_size)
 
 
+# Other stuff that is required
 best_val_loss = float("inf")
 best_model = None
 src_mask = generate_square_subsequent_mask(SEQ_LEN).to(rank)
@@ -314,6 +310,8 @@ gnets = GenomicBottleneck(model,
                         lr=experiment_config["gnets_lr"],
                         ignore_layers=ignore_layers) if (enable_gnets or init_with_gnets) else None
 
+
+# Load G-Net weights if applicable and predict the weights
 if args.load_gnets is not None:
     try:
         print("Loading G-Net weights from", args.load_gnets)
@@ -324,18 +322,22 @@ if args.load_gnets is not None:
     except:
         raise f"No G-Net existing under {args.load_gnets}"
 
+
+# Delete the G-Nets after initialization if we only initialize the model with them
 if init_with_gnets:
     print("Deleting G-Nets...")
     gnets = None
     enable_gnets = False
 
 
+# Calculate model num_params and compression factor if applicable
 num_params = sum(p.numel() for p in model.parameters())
 print("Number of model parameters:", num_params)   
-
-
 compression_factor = gnets.compression(model) if enable_gnets else 1.0
 print("G-Net compression:", compression_factor)  
+
+
+# Initialize the run config
 run_config = {"batchsize": BATCHSIZE,
                 "language": args.language,
                 "compression_layer_size": COMPRESSION_LAYER_SIZE,
@@ -346,12 +348,16 @@ run_config = {"batchsize": BATCHSIZE,
                 **experiment_config,
                 **base_config}
 
+
+# Compute initial validation loss
 print("Computing initial validation loss...")
 val_loss = evaluate(model, val_loader)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
 val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
 print("Validation loss:", val_loss, "Validation PPL:", val_ppl)
 
+
+# Initialize Wandb on rank 0
 if rank == 0:
     wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
                 host="https://wandb.fz-juelich.de")
@@ -369,6 +375,7 @@ if rank == 0:
     run.log({"validation_loss": val_loss, "val ppl": val_ppl})
     
 
+# Actual training loop
 for epoch in range(1, EPOCHS + 1):
     dist.barrier()
     print("New epoch...")
@@ -376,7 +383,6 @@ for epoch in range(1, EPOCHS + 1):
       
   
 # Evaluate the best model on the test dataset
-# TODO best_model is on cpu here, fix this!
 test_loss = evaluate(best_model.to(rank), test_loader) 
 test_ppl = np.exp(test_loss) # word-level PPL
 print("=" * 89)

@@ -1,26 +1,9 @@
 import os
-import sys
-import copy
-import time
 import argparse
 
-from tqdm import tqdm
-import wandb
-import numpy as np 
+from datasets import load_dataset
+from transformers import AutoTokenizer
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.distributed as dist
-from torch.utils.data import DataLoader
-from torch.nn.parallel import DistributedDataParallel as DDP
-
-from datasets import load_dataset, DatasetDict
-from datasets.distributed import split_dataset_by_node
-from transformers import AutoTokenizer, DataCollatorForLanguageModeling
-
-from torchGB import GenomicBottleneck
-from _transformer import GPT, predict_sequence, generate_square_subsequent_mask
 from config import load_config
 
 
