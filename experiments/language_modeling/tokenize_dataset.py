@@ -9,10 +9,14 @@ from config import load_config
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--path", type=str, default=".", 
+parser.add_argument("--target_path", type=str, default=".", 
                     help="Where to store the tokenized datset.")
 
-parser.add_argument("--language", type=str, default="en", help="Which language to use.")
+parser.add_argument("--source_path", type=str, default=".", 
+                    help="Where to store the tokenized datset.")
+
+parser.add_argument("--language", type=str, default="en", 
+                    help="Which language to use.")
 
 parser.add_argument("--seq_len", type=int, default=512, 
                     help="Context length to tokenize for.")
@@ -22,8 +26,7 @@ args = parser.parse_args()
 
 # Initialize the data directory
 base_config = load_config("base_config.yaml")
-prefix = base_config["data_dirs"]["prefix"]
-data_dir = prefix + base_config["data_dirs"][args.language]
+data_dir = args.source_path
 print("Data directory:", data_dir)
 
 
@@ -51,12 +54,14 @@ dataset = load_dataset("arrow",
                         split="train",
                         num_proc=16)
 
+
 rm_cols = dataset.column_names
 tokenized_dataset = dataset.map(tokenize_function, 
                                 batched=True, 
                                 remove_columns=rm_cols)
 
-new_path = os.path.join(args.path, args.language)
+
+new_path = os.path.join(args.target_path, args.language)
 print("Saving tokenized dataset to:", new_path)
 os.makedirs(new_path, exist_ok=False)
 tokenized_dataset.save_to_disk(new_path)

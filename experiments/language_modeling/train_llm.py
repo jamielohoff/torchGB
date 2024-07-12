@@ -17,7 +17,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from datasets import load_dataset
 from datasets.distributed import split_dataset_by_node
-from transformers import AutoTokenizer, DataCollatorForLanguageModeling
+from transformers import AutoTokenizer
 
 from torchGB import GenomicBottleneck
 from _transformer import GPT, predict_sequence, generate_square_subsequent_mask
@@ -73,6 +73,7 @@ args = parser.parse_args()
 # Setup of global variables
 torch.manual_seed(args.seed)
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 
 # Multiprocessing setup
@@ -97,6 +98,8 @@ base_config = load_config("base_config.yaml")
 prefix = base_config["data_dirs"]["prefix"]
 data_dir = prefix + base_config["data_dirs"][args.language]
 print("Data directory:", data_dir)
+cache_dir = base_config["cache_dir"]
+print("Cache directory:", cache_dir)
 
 
 # Determine mode of the experiment and set name
@@ -111,15 +114,18 @@ print("Starting experiment", experiment_name)
 
 # Load and create datasets
 train_dataset = load_dataset("arrow", 
-                            data_dir=data_dir, 
+                            data_dir=data_dir,
+                            cache_dir=cache_dir, 
                             split="train[:94%]")
 
 val_dataset = load_dataset("arrow", 
-                            data_dir=data_dir, 
+                            data_dir=data_dir,
+                            cache_dir=cache_dir, 
                             split="train[94%:95%]")
 
 test_dataset = load_dataset("arrow", 
                             data_dir=data_dir, 
+                            cache_dir=cache_dir,
                             split="train[95%:]")
 
 
@@ -288,7 +294,7 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
     with torch.no_grad():
         start_time = time.time()
         for data in eval_loader:
-            data = data["input_ids"].to(rank)
+            data = torch.stack(data["input_ids"]).t().to(rank)
             seq_len = data.size(1)
             output = model(data[:, :-1], src_mask[:seq_len, :seq_len])
             output_flat = output.view(-1, tokenizer.vocab_size)
