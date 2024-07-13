@@ -344,13 +344,10 @@ if init_with_gnets:
     enable_gnets = False
 
 
-if rank == 0:
-    # Calculate model num_params and compression factor if applicable
-    num_params = sum(p.numel() for p in model.parameters())
-    logger.info(f"Number of model parameters: {num_params}")   
-    compression_factor = gnets.compression(model) if enable_gnets else 1.0
-    logger.info(f"G-Net compression: {compression_factor}")  
-
+# Calculate model num_params and compression factor if applicable
+num_params = sum(p.numel() for p in model.parameters())
+compression_factor = gnets.compression(model) if enable_gnets else 1.0
+ 
 
 # Compute initial validation loss
 start_time = time.time()
@@ -358,11 +355,14 @@ val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=16, prefe
 val_loss = evaluate(model, val_loader)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
 val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
-logger.info(f"Validation loss: {val_loss} Validation PPL: {val_ppl} Time: {time.time() - start_time}")
 
 
 # Initialize Wandb on rank 0
 if rank == 0:
+    logger.info(f"Number of model parameters: {num_params}")   
+    logger.info(f"G-Net compression: {compression_factor}") 
+    logger.info(f"Validation loss: {val_loss} Validation PPL: {val_ppl} Time: {time.time() - start_time}")
+    
     run_config = {"commit_hash": commit_hash,
                     "batchsize": BATCHSIZE,
                     "language": args.language,
