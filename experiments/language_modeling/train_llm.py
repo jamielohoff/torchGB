@@ -344,11 +344,12 @@ if init_with_gnets:
     enable_gnets = False
 
 
-# Calculate model num_params and compression factor if applicable
-num_params = sum(p.numel() for p in model.parameters())
-logger.info(f"Number of model parameters: {num_params}")   
-compression_factor = gnets.compression(model) if enable_gnets else 1.0
-logger.info(f"G-Net compression: {compression_factor}")  
+if rank == 0:
+    # Calculate model num_params and compression factor if applicable
+    num_params = sum(p.numel() for p in model.parameters())
+    logger.info(f"Number of model parameters: {num_params}")   
+    compression_factor = gnets.compression(model) if enable_gnets else 1.0
+    logger.info(f"G-Net compression: {compression_factor}")  
 
 
 # Compute initial validation loss
