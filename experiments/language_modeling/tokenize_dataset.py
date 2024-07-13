@@ -1,7 +1,7 @@
 import os
 import argparse
 
-from datasets import load_dataset
+from datasets import load_dataset, DatasetDict
 from transformers import AutoTokenizer
 
 from config import load_config
@@ -49,17 +49,37 @@ def tokenize_function(element):
     return {"input_ids": input_batch}
 
 
-dataset = load_dataset("arrow", 
+train_dataset = load_dataset("arrow", 
                         data_dir=data_dir, 
-                        split="train",
+                        split="train[:94%]",
                         num_proc=16)
 
+val_dataset = load_dataset("arrow", 
+                        data_dir=data_dir, 
+                        split="train[94%:95%]",
+                        num_proc=16)
 
-rm_cols = dataset.column_names
-tokenized_dataset = dataset.map(tokenize_function, 
-                                batched=True, 
-                                remove_columns=rm_cols)
+test_dataset = load_dataset("arrow", 
+                            data_dir=data_dir, 
+                            split="train[95%:]",
+                            num_proc=16)
 
+rm_cols = train_dataset.column_names
+tokenized_train_dataset = train_dataset.map(tokenize_function, 
+                                            batched=True, 
+                                            remove_columns=rm_cols)
+
+tokenized_val_dataset = val_dataset.map(tokenize_function, 
+                                        batched=True, 
+                                        remove_columns=rm_cols)
+
+tokenized_test_dataset = test_dataset.map(tokenize_function, 
+                                        batched=True, 
+                                        remove_columns=rm_cols)
+
+tokenized_dataset = DatasetDict({"train": tokenized_train_dataset,
+                                "validation": tokenized_val_dataset,
+                                "test": tokenized_test_dataset})
 
 new_path = os.path.join(args.target_path, args.language)
 print("Saving tokenized dataset to:", new_path)
