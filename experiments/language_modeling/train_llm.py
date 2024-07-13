@@ -346,23 +346,8 @@ if init_with_gnets:
 
 # Calculate model num_params and compression factor if applicable
 num_params = sum(p.numel() for p in model.parameters())
-logger.info(f"Number of model parameters: {num_params}")   
 compression_factor = gnets.compression(model) if enable_gnets else 1.0
-logger.info(f"G-Net compression: {compression_factor}")  
-
-
-# Initialize the run config
-run_config = {"commit_hash": commit_hash,
-                "batchsize": BATCHSIZE,
-                "language": args.language,
-                "compression_layer_size": COMPRESSION_LAYER_SIZE,
-                "compression_factor": compression_factor,
-                "num_params": num_params,
-                "ignored layers": args.ignore_layers,
-                "seed": args.seed,
-                **experiment_config,
-                **base_config}
-
+ 
 
 # Compute initial validation loss
 start_time = time.time()
@@ -370,11 +355,25 @@ val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=16, prefe
 val_loss = evaluate(model, val_loader)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
 val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
-logger.info(f"Validation loss: {val_loss} Validation PPL: {val_ppl} Time: {time.time() - start_time}")
 
 
 # Initialize Wandb on rank 0
 if rank == 0:
+    logger.info(f"Number of model parameters: {num_params}")   
+    logger.info(f"G-Net compression: {compression_factor}") 
+    logger.info(f"Validation loss: {val_loss} Validation PPL: {val_ppl} Time: {time.time() - start_time}")
+    
+    run_config = {"commit_hash": commit_hash,
+                    "batchsize": BATCHSIZE,
+                    "language": args.language,
+                    "compression_layer_size": COMPRESSION_LAYER_SIZE,
+                    "compression_factor": compression_factor,
+                    "num_params": num_params,
+                    "ignored layers": args.ignore_layers,
+                    "seed": args.seed,
+                    **experiment_config,
+                    **base_config}
+    
     wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
                 host="https://wandb.fz-juelich.de")
     run_name = experiment_name + "_" + args.language
@@ -396,8 +395,8 @@ for epoch in range(1, EPOCHS + 1):
     dist.barrier()
     train_dataset = train_dataset.shuffle(seed=args.seed+epoch, buffer_size=10000)
     val_dataset = val_dataset.shuffle(seed=args.seed+epoch, buffer_size=10000)
-    train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=16, prefetch_factor=4)
-    val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=16, prefetch_factor=4)
+    train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=8, prefetch_factor=4)
+    val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=8, prefetch_factor=4)
 
     logger.info("New epoch...")
     train(model, gnets)
