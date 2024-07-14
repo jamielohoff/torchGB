@@ -15,7 +15,11 @@ def load_config(file: str) -> dict:
 def commit_to_experiments_branch(project_root: str):
     # Open the repository
     repo = git.Repo(project_root)
+<<<<<<< Updated upstream
     print(f"Committing current codebase of project {project_root} to the `experiments` branch...")
+=======
+    print("test")
+>>>>>>> Stashed changes
     
     try: 
         # Add all changes to the staging area
