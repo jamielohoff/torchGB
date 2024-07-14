@@ -17,23 +17,6 @@ def commit_to_experiments_branch(project_root: str):
     # Open the repository
     repo = git.Repo(project_root)
     
-<<<<<<< Updated upstream
-    # Stash changes
-    repo.git.stash("save")
-    
-    # Get the experiments branch
-    experiments_branch = repo.branches["experiments"]
-
-    # Checkout the experiments branch
-    repo.git.checkout("experiments")
-    
-    # Pop the stash
-    repo.git.stash("pop")
-
-    if repo.is_dirty(untracked_files=True): 
-        # Add all changes to the staging area
-        repo.git.add(all=True)
-=======
     try: 
         # Add all changes to the staging area
         repo.git.add(all=True)
@@ -49,7 +32,6 @@ def commit_to_experiments_branch(project_root: str):
         
         # Pop the stash
         repo.git.stash("pop")
->>>>>>> Stashed changes
 
         if repo.is_dirty(untracked_files=True): 
             # Add all changes to the staging area
