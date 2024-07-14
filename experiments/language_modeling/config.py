@@ -15,14 +15,10 @@ def load_config(file: str) -> dict:
 def commit_to_experiments_branch(project_root: str):
     # Open the repository
     repo = git.Repo(project_root)
-    
-    print(f"Committing current codebase under {project_root} to the `experiments` branch...")
-    print("test3")
-    
-    try: 
-        # Add all changes to the staging area
-        # repo.git.add(all=True)
         
+    print(f"Committing current codebase under {project_root} to the `experiments` branch...")
+    
+    try:         
         # Stash changes
         repo.git.stash("save")
         
@@ -34,13 +30,17 @@ def commit_to_experiments_branch(project_root: str):
         
         # Pop the stash
         repo.git.stash("pop")
+        print("popping works")
+        # Accept incoming changes on the new branch
+        repo.git.merge("--strategy=ours", "experiments")
 
         if repo.is_dirty(untracked_files=True): 
+            print("Committing untracked files...")
             # Add all changes to the staging area
             repo.git.add(all=True)
 
             # Commit the changes to the experiments branch
-            repo.git.commit(message="Auto-commit to experiments branch.")
+            repo.git.commit(message="Auto-commit to `experiments` branch.")
 
             # Push the changes to the remote repository
             repo.remote().push(experiments_branch)
@@ -53,12 +53,11 @@ def commit_to_experiments_branch(project_root: str):
         print(f"Error: {e}")
         print("An error occurred while committing to the experiments branch.")
     
-    # Go back to main branch
-    experiments_branch = repo.branches["main"]
-
-    # Checkout the experiments branch
-    repo.git.checkout("main")
+    # Checkout the `main` branch
+    # repo.git.checkout("main")
     
     return commit_hash
             
+            
+
     
