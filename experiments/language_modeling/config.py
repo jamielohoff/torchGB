@@ -36,7 +36,7 @@ def commit_to_experiments_branch(project_root: str):
             repo.remote().push(main_branch)
         
         # Accept incoming changes on the new branch
-        repo.git.merge("--strategy=ours", "experiments")
+        repo.git.merge("experiments", X="ours")
 
         # Checkout the experiments branch
         repo.git.checkout("experiments")
