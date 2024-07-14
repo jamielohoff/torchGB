@@ -14,18 +14,35 @@ def load_config(file: str) -> dict:
 
 def commit_to_experiments_branch(project_root: str):
     # Open the repository
-    repo = git.Repo(project_root)
-        
+    repo = git.Repo(project_root)    
+    
+    # Get the experiments branch
+    experiments_branch = repo.branches["experiments"]
+    
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
     
     try:         
         # Stash changes
-        repo.git.checkout("main")
+        repo.git.stash("save")
         
-        # Get the experiments branch
-        experiments_branch = repo.branches["experiments"]
-
+        # Add local changes
+        repo.git.add(all=True)
+        
+        # Accept incoming changes on the new branch
         repo.git.merge("--strategy=ours", "experiments")
+        print("merge done")
+
+        # Checkout the experiments branch
+        repo.git.checkout("experiments")
+        
+        # Pop the stash
+        repo.git.stash("apply")
+
+        # Checkout the experiments branch
+        repo.git.checkout("experiments")
+        
+        # Pop the stash
+        repo.git.stash("pop")
 
         if repo.is_dirty(untracked_files=True): 
             print("Committing untracked files...")
@@ -41,16 +58,15 @@ def commit_to_experiments_branch(project_root: str):
         # Get the commit hash values
         commit_hash = repo.head.commit.hexsha
         print(f"Commit hash: {commit_hash}")
-        
     except Exception as e:
         print(f"Error: {e}")
         print("An error occurred while committing to the experiments branch.")
     
-    # Checkout the `main` branch
+    # Checkout the  branch
     repo.git.checkout("main")
     
-    return commit_hash
-            
-            
-
+    # Reapply the stashed stuff
+    repo.git.stash("pop")
     
+    return commit_hash
+     
