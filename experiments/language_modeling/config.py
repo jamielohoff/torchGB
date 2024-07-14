@@ -25,6 +25,9 @@ def commit_to_experiments_branch(project_root: str):
         # Stash changes
         repo.git.stash("save")
         
+        # Add local changes
+        repo.git.add(all=True)
+        
         # Accept incoming changes on the new branch
         repo.git.merge("--strategy=ours", "experiments")
 
@@ -52,13 +55,8 @@ def commit_to_experiments_branch(project_root: str):
         print(f"Error: {e}")
         print("An error occurred while committing to the experiments branch.")
     
-    # Go back to main branch
-    experiments_branch = repo.branches["main"]
-
     # Checkout the  branch
     repo.git.checkout("main")
     
     return commit_hash
-            
-
-
+    
