@@ -66,6 +66,3 @@ def commit_to_experiments_branch(project_root: str):
     
     return commit_hash
             
-            
-
-    
