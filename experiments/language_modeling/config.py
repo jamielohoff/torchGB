@@ -16,26 +16,40 @@ def commit_to_experiments_branch(project_root: str):
     print("Committing current codebase to the `experiments` branch...")
     # Open the repository
     repo = git.Repo(project_root)
-
-    if repo.is_dirty(untracked_files=True): 
+    
+    try: 
+        # Add all changes to the staging area
+        repo.git.add(all=True)
+        
+        # Stash changes
+        repo.git.stash("save")
+        
         # Get the experiments branch
         experiments_branch = repo.branches["experiments"]
 
         # Checkout the experiments branch
         repo.git.checkout("experiments")
         
-        # Add all changes to the staging area
-        repo.git.add(all=True)
+        # Pop the stash
+        repo.git.stash("pop")
 
-        # Commit the changes to the experiments branch
-        repo.git.commit(message="Auto-commit to experiments branch.")
+        if repo.is_dirty(untracked_files=True): 
+            # Add all changes to the staging area
+            repo.git.add(all=True)
 
-        # Push the changes to the remote repository
-        repo.remote().push(experiments_branch)
+            # Commit the changes to the experiments branch
+            repo.git.commit(message="Auto-commit to experiments branch.")
 
-    # Get the commit hash values
-    commit_hash = repo.head.commit.hexsha
-    print(f"Commit hash: {commit_hash}")
+            # Push the changes to the remote repository
+            repo.remote().push(experiments_branch)
+            
+        # Get the commit hash values
+        commit_hash = repo.head.commit.hexsha
+        print(f"Commit hash: {commit_hash}")
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        print("An error occurred while committing to the experiments branch.")
     
     # Go back to main branch
     experiments_branch = repo.branches["main"]
