@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.distributed as dist
 from torch.utils.data import DataLoader
+from torchdata.stateful_dataloader import StatefulDataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from datasets import load_dataset
@@ -70,9 +71,9 @@ parser.add_argument("--transfer_layers", type=str, default="",
 parser.add_argument("--no_commit", action="store_false", 
                     help="Whether to create a commit that belongs to the experiment.")
 
-parser.add_argument("--loglevel", type=str, default="INFO", help="Log level.")
+parser.add_argument("--loglevel", type=str, default="INFO", help="Set log level.")
 
-parser.add_argument("--load_dataset_state", action="store_false",
+parser.add_argument("--load_dataset_state", action="store_true",
                     help="Whether to load the dataset state from a checkpoint.")
 
 args = parser.parse_args()
@@ -119,7 +120,10 @@ logger.debug(f"Cache directory: {cache_dir}")
 
 # Commit the current codebase to the experiments branch
 if rank == 0 and args.no_commit:
+    logger.info(f"Committing current codebase under {base_config["project_root"]} to the `experiments` branch...")
     commit_hash = commit_to_experiments_branch(base_config["project_root"])
+else:
+    commit_hash = "test"
 
 
 # Determine mode of the experiment and set name
@@ -130,6 +134,21 @@ if init_with_gnets:
     assert args.load_gnets is not None, "Please enter a path to the weights for the G-Nets."
 experiment_name = "GBT_" + args.name if enable_gnets else args.name
 logger.info(f"Starting experiment {experiment_name}")
+
+
+# Set the model and gnet checkpoint paths
+fname = experiment_name + "_gnets_" + args.language + ".pth"
+GNET_CHCKPT_PATH  = os.path.join(base_config["save_gnets"], fname)
+fname = experiment_name + "_model_" + args.language + ".pth"
+MODEL_CHCKPT_PATH  = os.path.join(base_config["save_model"], fname)
+
+
+# Check if the files already exist
+if rank == 0:
+    if os.path.isfile(GNET_CHCKPT_PATH):
+        logger.warning(f"File {GNET_CHCKPT_PATH} already exists.")
+    if os.path.isfile(MODEL_CHCKPT_PATH):
+        logger.warning(f"File {MODEL_CHCKPT_PATH} already exists.")
 
 
 # Load and create datasets
@@ -151,7 +170,19 @@ test_dataset = load_dataset("arrow",
                             cache_dir=cache_dir,
                             split="test",
                             streaming=True)
-test_dataset = test_dataset.shuffle(seed=args.seed, buffer_size=10000)
+
+
+# Creating dataloaders
+def get_dataloader(dataset, rank, world_size, num_workers=1, prefetch_factor=1, batchsize=BATCHSIZE, stateful=False):
+    node_data = split_dataset_by_node(dataset, rank=rank, world_size=world_size)
+    loader = StatefulDataLoader if stateful else DataLoader
+    return loader(node_data, 
+                pin_memory=True,
+                batch_size=batchsize,
+                num_workers=num_workers,
+                prefetch_factor=prefetch_factor)
+
+train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=8, prefetch_factor=4, stateful=True)
 
 
 # val_num_words = sum(len(line["text"].split(" ")) for line in oscar_dataset["validation"])
@@ -160,7 +191,7 @@ test_dataset = test_dataset.shuffle(seed=args.seed, buffer_size=10000)
 #       f"Number of words in test: {test_num_words}")
 
 
-# Initialize the tokenizer
+# Initialize tokenizer
 tokenizer_path = os.path.join(base_config["tokenizer_path"], "oscar_2301_" + args.language)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 tokenizer.pad_token = tokenizer.eos_token
@@ -182,8 +213,9 @@ if args.load_model is not None:
         try:
             SEED = torch.load(args.load_model, map_location=torch.device(rank))["seed"]
             train_dataset.shuffle(seed=SEED, buffer_size=10000)
-            train_dataset.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["dataset"])
-            logger.debug(f"Loaded dataset state from {args.load_model}")
+            train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=8, prefetch_factor=4, stateful=True)
+            train_loader.load_state_dict(torch.load(args.load_model, map_location=torch.device("cpu"))["dataloader"])
+            logger.info(f"Loaded dataloader state from {args.load_model} with random seed {SEED}")
         except:
             raise f"No dataset state existing under {args.load_model}"
     
@@ -210,27 +242,13 @@ if args.load_model is not None:
             logger.debug(f"Loaded model weights from {args.load_model} for weights {args.transfer_layers}")
         except:
             raise f"No model existing under {args.load_model}"
-        logger.info("Using scheduler...")
         scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
 else:
-    logger.info("Using scheduler...")
     scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
-
-
-# Creating dataloaders
-def get_dataloader(dataset, rank, world_size, num_workers=1, prefetch_factor=1, batchsize=BATCHSIZE):
-    node_data = split_dataset_by_node(dataset, rank=rank, world_size=world_size)
-    dataloader = DataLoader(node_data, 
-                            pin_memory=True,
-                            batch_size=batchsize,
-                            num_workers=num_workers,
-                            prefetch_factor=prefetch_factor)
-    return dataloader
 
 
 # Other stuff that is required
 best_val_loss = float("inf")
-best_model = None
 src_mask = generate_square_subsequent_mask(SEQ_LEN).to(rank)
 
 def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
@@ -294,25 +312,19 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             global best_val_loss
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                global best_model
-                best_model = copy.deepcopy(model).cpu()
-                
-                pth = base_config["save_gnets"]
-                fname = experiment_name + "_gnets_" + args.language + ".pth"
-                fname = os.path.join(pth, fname)
-                
+   
                 if enable_gnets:
-                    logger.debug(f"Saving G-Net weights under {fname}")
-                    gnets.save(fname) 
+                    logger.debug(f"Saving G-Net weights under {GNET_CHCKPT_PATH}")
+                    gnets.save(GNET_CHCKPT_PATH) 
                 
                 if args.checkpoint_model and rank == 0:
-                    fname = fname.replace("gnets", "model")
-                    logger.debug(f"Saving model weights, optimizer and dataset state under {fname}")
-                    param_dict = {"seed": args.seed+epoch,
+                    logger.debug(f"Saving model weights, optimizer,"
+                                f"seed and dataset state under {MODEL_CHCKPT_PATH}")
+                    param_dict = {"seed": SEED,
                                 "model": model.state_dict(),
                                 "optimizer": optimizer.state_dict(),
-                                "dataset": train_dataset.state_dict()}
-                    torch.save(param_dict, fname)
+                                "dataloader": train_loader.state_dict()}
+                    torch.save(param_dict, MODEL_CHCKPT_PATH)
                 else:
                     time.sleep(1)
                 
@@ -374,6 +386,7 @@ val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=16, prefe
 val_loss = evaluate(model, val_loader)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
 val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
+val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=8, prefetch_factor=4)
 
 
 # Initialize Wandb on rank 0
@@ -412,20 +425,20 @@ if rank == 0:
 # Actual training loop
 for epoch in range(1, EPOCHS + 1):
     dist.barrier()
-
-    train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=8, prefetch_factor=4)
-    val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=8, prefetch_factor=4)
-
-    logger.info("New epoch...")
     train(model, gnets)
-    
-    train_dataset = train_dataset.shuffle(seed=SEED+epoch, buffer_size=10000)
-    val_dataset = val_dataset.shuffle(seed=SEED+epoch, buffer_size=10000)
+    SEED += 1
+    train_dataset = train_dataset.shuffle(seed=SEED, buffer_size=10000)
+    val_dataset = val_dataset.shuffle(seed=SEED, buffer_size=10000)
+    train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=8, prefetch_factor=4, stateful=True)
+    val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=8, prefetch_factor=4)
       
   
 # Evaluate the best model on the test dataset
+test_dataset = test_dataset.shuffle(seed=args.seed, buffer_size=10000)
 test_loader = get_dataloader(test_dataset, rank, world_size, num_workers=4, prefetch_factor=2, batchsize=EVAL_BATCHSIZE)
-test_loss = evaluate(best_model.to(rank), test_loader) 
+model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["model"])
+
+test_loss = evaluate(model.to(rank), test_loader) 
 test_ppl = np.exp(test_loss) # word-level PPL
 logger.info(f"| End of training | test loss {test_loss:5.2f} | test ppl {test_ppl:8.2f}")
 run.finish()

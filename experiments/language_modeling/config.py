@@ -19,8 +19,6 @@ def commit_to_experiments_branch(project_root: str):
     # Get the experiments branch
     experiments_branch = repo.branches["experiments"]
     
-    print(f"Committing current codebase under {project_root} to the `experiments` branch...")
-
     try:       
         # Switch to the main branch
         repo.git.checkout("main")  

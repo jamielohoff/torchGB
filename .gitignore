@@ -55,9 +55,10 @@ MANIFEST
 
 # Project-specific ignores
 sync_wandb.sh
+base_config.yml
+experiment_config.yml
 *.pt
 *.pth
-*.yaml
 *.zst
 **/wandb/
 **/wandb_jureca/
