@@ -62,7 +62,7 @@ parser.add_argument("--checkpoint_model", action="store_false",
 parser.add_argument("--ignore_layers", type=str, default="",
                     help="Which layers to ignore when compressing with the genomic bottleneck.")
 
-parser.add_argument("--prompt", type=str, default="Hello World!",
+parser.add_argument("--prompt", type=str, default=None,
                     help="Test prompt for LM.")
 
 parser.add_argument("--transfer_layers", type=str, default="",
@@ -286,11 +286,12 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             dist.all_reduce(cur_loss, op=dist.ReduceOp.AVG)
             cur_loss = cur_loss.cpu().item()
             ppl = np.exp(cur_loss)
-            predicted_seq = predict_sequence(args.prompt, tokenizer, model, rank, seq_size=32)
+            if args.prompt is not None:
+                predicted_seq = predict_sequence(args.prompt, tokenizer, model, rank, seq_size=32)
             if rank == 0:
                 run.log({"train_loss": cur_loss, "train ppl": ppl})
-                logger.info(predicted_seq)
-                logger.info(f"| epoch {epoch:3d} | {batch:5d} batches | "
+                logger.debug(predicted_seq)
+                logger.debug(f"| epoch {epoch:3d} | {batch:5d} batches | "
                             f"ms/batch {ms_per_batch:5.2f} | "
                             f"loss {cur_loss:5.2f} | ppl {ppl:8.2f}")
             dist.barrier()
@@ -329,7 +330,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                     time.sleep(1)
                 
 
-def evaluate(model: nn.Module, eval_loader: DataLoader) -> float:
+def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
     model.eval() # turn on evaluation mode
     total_loss, norm = 0, 0
     global src_mask
