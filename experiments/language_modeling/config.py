@@ -20,7 +20,7 @@ def commit_to_experiments_branch(project_root: str):
     experiments_branch = repo.branches["experiments"]
     
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
-    
+    print("test")
     try:         
         # Stash changes
         repo.git.stash("save")
@@ -37,12 +37,6 @@ def commit_to_experiments_branch(project_root: str):
         
         # Pop the stash
         repo.git.stash("apply")
-
-        # Checkout the experiments branch
-        repo.git.checkout("experiments")
-        
-        # Pop the stash
-        repo.git.stash("pop")
 
         if repo.is_dirty(untracked_files=True): 
             print("Committing untracked files...")
