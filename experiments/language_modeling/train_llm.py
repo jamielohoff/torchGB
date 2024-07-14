@@ -67,6 +67,9 @@ parser.add_argument("--prompt", type=str, default="Hello World!",
 parser.add_argument("--transfer_layers", type=str, default="",
                     help="Which layers to transfer from the loaded model.")
 
+parser.add_argument("--no_commit", action="store_false", 
+                    help="Whether to create a commit that belongs to the experiment.")
+
 parser.add_argument("--loglevel", type=str, default="INFO", help="Log level.")
 
 args = parser.parse_args()
@@ -111,7 +114,7 @@ logger.debug(f"Cache directory: {cache_dir}")
 
 
 # Commit the current codebase to the experiments branch
-if rank == 0:
+if rank == 0 and args.no_commit:
     commit_hash = commit_to_experiments_branch(base_config["project_root"])
 
 
