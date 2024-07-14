@@ -50,9 +50,11 @@ def commit_to_experiments_branch(project_root: str):
             repo.git.commit(message="Auto-commit to `experiments` branch.")
 
             # Push the changes to the remote repository
-            repo.remote().push(experiments_branch)
+            
         else:
             print("No changes to commit.")
+            
+        repo.remote().push(experiments_branch)
             
         # Get the commit hash values
         commit_hash = repo.head.commit.hexsha
