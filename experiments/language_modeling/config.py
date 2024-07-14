@@ -21,7 +21,7 @@ def commit_to_experiments_branch(project_root: str):
     experiments_branch = repo.branches["experiments"]
     
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
-    print("test")
+
     try:       
         repo.git.checkout("main")  
         if repo.is_dirty(untracked_files=True): 
@@ -30,30 +30,15 @@ def commit_to_experiments_branch(project_root: str):
             repo.git.add(all=True)
 
             # Commit the changes to the experiments branch
-            repo.git.commit(message="Auto-commit to `main` branch.")
-
-            # Push the changes to the remote repository
-            repo.remote().push(main_branch)
+            repo.git.commit(message="Auto-commit to `experiment` branch.")
 
         # Checkout the experiments branch
         repo.git.checkout("experiments")
         
         # Accept incoming changes on the new branch
         repo.git.merge("main", X="theirs")
-
-        if repo.is_dirty(untracked_files=True): 
-            print("Committing untracked files...")
-            # Add all changes to the staging area
-            repo.git.add(all=True)
-
-            # Commit the changes to the experiments branch
-            repo.git.commit(message="Auto-commit to `experiments` branch.")
-
-            # Push the changes to the remote repository
             
-        else:
-            print("No changes to commit.")
-            
+        # Push the changes to the remote repository
         repo.remote().push(experiments_branch)
             
         # Get the commit hash values
