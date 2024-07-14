@@ -13,9 +13,9 @@ def load_config(file: str) -> dict:
 
 
 def commit_to_experiments_branch(project_root: str):
-    print("Committing current codebase to the `experiments` branch...")
     # Open the repository
     repo = git.Repo(project_root)
+    print(f"Committing current codebase of project {project_root} to the `experiments` branch...")
     
     try: 
         # Add all changes to the staging area
