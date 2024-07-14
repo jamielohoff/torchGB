@@ -34,6 +34,7 @@ def commit_to_experiments_branch(project_root: str):
         repo.git.stash("pop")
 
         if repo.is_dirty(untracked_files=True): 
+            print("Committing untracked files...")
             # Add all changes to the staging area
             repo.git.add(all=True)
 
