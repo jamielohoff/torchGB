@@ -30,6 +30,13 @@ def commit_to_experiments_branch(project_root: str):
         
         # Accept incoming changes on the new branch
         repo.git.merge("--strategy=ours", "experiments")
+        print("merge done")
+
+        # Checkout the experiments branch
+        repo.git.checkout("experiments")
+        
+        # Pop the stash
+        repo.git.stash("apply")
 
         # Checkout the experiments branch
         repo.git.checkout("experiments")
@@ -57,6 +64,9 @@ def commit_to_experiments_branch(project_root: str):
     
     # Checkout the  branch
     repo.git.checkout("main")
+    
+    # Reapply the stashed stuff
+    repo.git.stash("pop")
     
     return commit_hash
     
