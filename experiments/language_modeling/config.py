@@ -22,7 +22,8 @@ def commit_to_experiments_branch(project_root: str):
     
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
 
-    try:         
+    try:       
+        repo.git.checkout("main")  
         if repo.is_dirty(untracked_files=True): 
             print("Committing untracked files...")
             # Add all changes to the staging area
@@ -36,7 +37,6 @@ def commit_to_experiments_branch(project_root: str):
         
         # Accept incoming changes on the new branch
         repo.git.merge("--strategy=ours", "experiments")
-        print("merge done")
 
         # Checkout the experiments branch
         repo.git.checkout("experiments")
