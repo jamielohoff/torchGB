@@ -40,7 +40,7 @@ def commit_to_experiments_branch(project_root: str):
 
         # Checkout the experiments branch
         repo.git.checkout("experiments")
-        
+
         if repo.is_dirty(untracked_files=True): 
             print("Committing untracked files...")
             # Add all changes to the staging area
