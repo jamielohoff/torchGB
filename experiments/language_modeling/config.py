@@ -17,15 +17,15 @@ def commit_to_experiments_branch(project_root: str):
     repo = git.Repo(project_root)    
     
     # Get the experiments branch
-    main_branch = repo.branches["main"]
     experiments_branch = repo.branches["experiments"]
     
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
 
     try:       
+        # Switch to the main branch
         repo.git.checkout("main")  
+        
         if repo.is_dirty(untracked_files=True): 
-            print("Committing untracked files...")
             # Add all changes to the staging area
             repo.git.add(all=True)
 
@@ -44,6 +44,7 @@ def commit_to_experiments_branch(project_root: str):
         # Get the commit hash values
         commit_hash = repo.head.commit.hexsha
         print(f"Commit hash: {commit_hash}")
+        
     except Exception as e:
         print(f"Error: {e}")
         print("An error occurred while committing to the experiments branch.")
