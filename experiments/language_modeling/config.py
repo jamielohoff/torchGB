@@ -20,7 +20,7 @@ def commit_to_experiments_branch(project_root: str):
     experiments_branch = repo.branches["experiments"]
     
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
-    print("test")
+    
     try:         
         # Stash changes
         repo.git.stash("save")
@@ -48,6 +48,8 @@ def commit_to_experiments_branch(project_root: str):
 
             # Push the changes to the remote repository
             repo.remote().push(experiments_branch)
+        else:
+            print("No changes to commit.")
             
         # Get the commit hash values
         commit_hash = repo.head.commit.hexsha
