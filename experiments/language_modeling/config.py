@@ -21,7 +21,7 @@ def commit_to_experiments_branch(project_root: str):
     experiments_branch = repo.branches["experiments"]
     
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
-    print("pimmel")
+    print("test")
     try:       
         repo.git.checkout("main")  
         if repo.is_dirty(untracked_files=True): 
@@ -34,12 +34,12 @@ def commit_to_experiments_branch(project_root: str):
 
             # Push the changes to the remote repository
             repo.remote().push(main_branch)
-        
-        # Accept incoming changes on the new branch
-        repo.git.merge("experiments", X="ours")
 
         # Checkout the experiments branch
         repo.git.checkout("experiments")
+        
+        # Accept incoming changes on the new branch
+        repo.git.merge("main", X="theirs")
 
         if repo.is_dirty(untracked_files=True): 
             print("Committing untracked files...")
