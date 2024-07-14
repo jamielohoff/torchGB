@@ -72,6 +72,9 @@ parser.add_argument("--no_commit", action="store_false",
 
 parser.add_argument("--loglevel", type=str, default="INFO", help="Log level.")
 
+parser.add_argument("--load_dataset_state", action="store_false",
+                    help="Whether to load the dataset state from a checkpoint.")
+
 args = parser.parse_args()
 
 
@@ -94,7 +97,7 @@ logger.debug(f"Rank: {rank} World Size: {world_size}")
 
 
 # Initialize experiment hyperparameters
-experiment_config = load_config("experiment_config.yaml")
+experiment_config = load_config("experiment_config.yml")
 COMPRESSION_LAYER_SIZE = args.compression_size
 EPOCHS = experiment_config["epochs"]
 BATCHSIZE = args.batchsize
@@ -102,10 +105,11 @@ EVAL_BATCHSIZE = args.batchsize * 4
 SEQ_LEN = experiment_config["model"]["seq_len"]
 LOG_INTERVAL = experiment_config["log_interval"]
 VAL_INTERVAL = experiment_config["val_interval"]
+SEED = args.seed
 
 
 # Initialize the data directory
-base_config = load_config("base_config.yaml")
+base_config = load_config("base_config.yml")
 prefix = base_config["data_dirs"]["prefix"]
 data_dir = prefix + base_config["data_dirs"][args.language]
 logger.debug(f"Data directory: {data_dir}")
@@ -173,6 +177,16 @@ scheduler = None
 
 # Dealing with custom model loading
 if args.load_model is not None:
+    # Load dataset state if applicable
+    if args.load_dataset_state:
+        try:
+            SEED = torch.load(args.load_model, map_location=torch.device(rank))["seed"]
+            train_dataset.shuffle(seed=SEED, buffer_size=10000)
+            train_dataset.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["dataset"])
+            logger.debug(f"Loaded dataset state from {args.load_model}")
+        except:
+            raise f"No dataset state existing under {args.load_model}"
+    
     if args.transfer_layers == "":
         try:
             model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["model"])
@@ -293,9 +307,11 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 
                 if args.checkpoint_model and rank == 0:
                     fname = fname.replace("gnets", "model")
-                    logger.debug(f"Saving model weights under {fname}")
-                    param_dict = {"model": model.state_dict(),
-                                "optimizer": optimizer.state_dict()}
+                    logger.debug(f"Saving model weights, optimizer and dataset state under {fname}")
+                    param_dict = {"seed": args.seed+epoch,
+                                "model": model.state_dict(),
+                                "optimizer": optimizer.state_dict(),
+                                "dataset": train_dataset.state_dict()}
                     torch.save(param_dict, fname)
                 else:
                     time.sleep(1)
@@ -396,13 +412,15 @@ if rank == 0:
 # Actual training loop
 for epoch in range(1, EPOCHS + 1):
     dist.barrier()
-    train_dataset = train_dataset.shuffle(seed=args.seed+epoch, buffer_size=10000)
-    val_dataset = val_dataset.shuffle(seed=args.seed+epoch, buffer_size=10000)
+
     train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=8, prefetch_factor=4)
     val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=8, prefetch_factor=4)
 
     logger.info("New epoch...")
     train(model, gnets)
+    
+    train_dataset = train_dataset.shuffle(seed=SEED+epoch, buffer_size=10000)
+    val_dataset = val_dataset.shuffle(seed=SEED+epoch, buffer_size=10000)
       
   
 # Evaluate the best model on the test dataset
