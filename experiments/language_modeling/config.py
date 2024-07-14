@@ -21,7 +21,7 @@ def commit_to_experiments_branch(project_root: str):
     experiments_branch = repo.branches["experiments"]
     
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
-    
+
     try:         
         if repo.is_dirty(untracked_files=True): 
             print("Committing untracked files...")
@@ -41,14 +41,6 @@ def commit_to_experiments_branch(project_root: str):
         # Checkout the experiments branch
         repo.git.checkout("experiments")
         
-        # Apply the stash
-        repo.git.stash("apply")
-
-        # Check if there are any merge conflicts
-        if repo.git.unmerged_files():
-            print("Merge conflicts detected. Aborting commit.")
-            repo.git.stash("drop")
-
         if repo.is_dirty(untracked_files=True): 
             print("Committing untracked files...")
             # Add all changes to the staging area
@@ -71,9 +63,6 @@ def commit_to_experiments_branch(project_root: str):
     
     # Checkout the  branch
     repo.git.checkout("main")
-    
-    # Reapply the stashed stuff
-    repo.git.stash("pop")
-    
+        
     return commit_hash
     
