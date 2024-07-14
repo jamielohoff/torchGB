@@ -17,16 +17,22 @@ def commit_to_experiments_branch(project_root: str):
     repo = git.Repo(project_root)    
     
     # Get the experiments branch
+    main_branch = repo.branches["main"]
     experiments_branch = repo.branches["experiments"]
     
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
     
     try:         
-        # Stash changes
-        repo.git.stash("save")
-        
-        # Add local changes
-        repo.git.add(all=True)
+        if repo.is_dirty(untracked_files=True): 
+            print("Committing untracked files on `main`...")
+            # Add all changes to the staging area
+            repo.git.add(all=True)
+
+            # Commit the changes to the experiments branch
+            repo.git.commit(message="Auto-commit to `main` branch.")
+
+            # Push the changes to the remote repository
+            repo.remote().push(main_branch)
         
         # Accept incoming changes on the new branch
         repo.git.merge("--strategy=ours", "experiments")
@@ -35,14 +41,13 @@ def commit_to_experiments_branch(project_root: str):
         # Checkout the experiments branch
         repo.git.checkout("experiments")
         
-        # Pop the stash
+        # Apply the stash
         repo.git.stash("apply")
 
-        # Checkout the experiments branch
-        repo.git.checkout("experiments")
-        
-        # Pop the stash
-        repo.git.stash("pop")
+        # Check if there are any merge conflicts
+        if repo.git.unmerged_files():
+            print("Merge conflicts detected. Aborting commit.")
+            repo.git.stash("drop")
 
         if repo.is_dirty(untracked_files=True): 
             print("Committing untracked files...")
@@ -54,6 +59,8 @@ def commit_to_experiments_branch(project_root: str):
 
             # Push the changes to the remote repository
             repo.remote().push(experiments_branch)
+        else:
+            print("No changes to commit.")
             
         # Get the commit hash values
         commit_hash = repo.head.commit.hexsha
@@ -69,4 +76,4 @@ def commit_to_experiments_branch(project_root: str):
     repo.git.stash("pop")
     
     return commit_hash
-     
+    
