@@ -16,6 +16,12 @@ def commit_to_experiments_branch(project_root: str):
     # Open the repository
     repo = git.Repo(project_root)
     
+     # Go to main branch
+    experiments_branch = repo.branches["main"]
+
+    # Checkout the `main` branch
+    repo.git.checkout("main")
+    
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
     
     try:         
@@ -55,9 +61,11 @@ def commit_to_experiments_branch(project_root: str):
     # Go back to main branch
     experiments_branch = repo.branches["main"]
 
-    # Checkout the experiments branch
+    # Checkout the `main` branch
     repo.git.checkout("main")
     
     return commit_hash
             
+            
+
     
