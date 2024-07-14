@@ -14,13 +14,10 @@ def load_config(file: str) -> dict:
 
 def commit_to_experiments_branch(project_root: str):
     # Open the repository
-    repo = git.Repo(project_root)
+    repo = git.Repo(project_root)    
     
-     # Go to main branch
-    experiments_branch = repo.branches["main"]
-
-    # Checkout the `main` branch
-    repo.git.checkout("main")
+    # Get the experiments branch
+    experiments_branch = repo.branches["experiments"]
     
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
     
@@ -28,17 +25,14 @@ def commit_to_experiments_branch(project_root: str):
         # Stash changes
         repo.git.stash("save")
         
-        # Get the experiments branch
-        experiments_branch = repo.branches["experiments"]
+        # Accept incoming changes on the new branch
+        repo.git.merge("--strategy=ours", "experiments")
 
         # Checkout the experiments branch
         repo.git.checkout("experiments")
         
         # Pop the stash
         repo.git.stash("pop")
-        
-        # Accept incoming changes on the new branch
-        repo.git.merge("--strategy=ours", "experiments")
 
         if repo.is_dirty(untracked_files=True): 
             print("Committing untracked files...")
@@ -61,8 +55,10 @@ def commit_to_experiments_branch(project_root: str):
     # Go back to main branch
     experiments_branch = repo.branches["main"]
 
-    # Checkout the `main` branch
+    # Checkout the  branch
     repo.git.checkout("main")
     
     return commit_hash
             
+
+
