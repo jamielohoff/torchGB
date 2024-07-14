@@ -21,7 +21,7 @@ def commit_to_experiments_branch(project_root: str):
     experiments_branch = repo.branches["experiments"]
     
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
-
+    print("pimmel")
     try:       
         repo.git.checkout("main")  
         if repo.is_dirty(untracked_files=True): 
