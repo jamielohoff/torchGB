@@ -17,6 +17,7 @@ def commit_to_experiments_branch(project_root: str):
     repo = git.Repo(project_root)
     
     print(f"Committing current codebase under {project_root} to the `experiments` branch...")
+    print("test3")
     
     try: 
         # Add all changes to the staging area
