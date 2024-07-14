@@ -20,18 +20,11 @@ def commit_to_experiments_branch(project_root: str):
     
     try:         
         # Stash changes
-        repo.git.stash("save")
+        repo.git.checkout("main")
         
         # Get the experiments branch
         experiments_branch = repo.branches["experiments"]
 
-        # Checkout the experiments branch
-        repo.git.checkout("experiments")
-        
-        # Pop the stash
-        repo.git.stash("pop")
-        print("popping works")
-        # Accept incoming changes on the new branch
         repo.git.merge("--strategy=ours", "experiments")
 
         if repo.is_dirty(untracked_files=True): 
@@ -54,7 +47,7 @@ def commit_to_experiments_branch(project_root: str):
         print("An error occurred while committing to the experiments branch.")
     
     # Checkout the `main` branch
-    # repo.git.checkout("main")
+    repo.git.checkout("main")
     
     return commit_hash
             
