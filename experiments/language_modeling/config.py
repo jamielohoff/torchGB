@@ -38,14 +38,14 @@ def commit_to_experiments_branch(project_root: str):
             
         # Push the changes to the remote repository
         repo.remote().push(experiments_branch)
-            
-        # Get the commit hash values
-        commit_hash = repo.head.commit.hexsha
-        print(f"Commit hash: {commit_hash}")
         
     except Exception as e:
         print(f"Error: {e}")
         print("An error occurred while committing to the experiments branch.")
+        
+    # Get the commit hash values
+    commit_hash = repo.head.commit.hexsha
+    print(f"Commit hash: {commit_hash}")
     
     # Checkout the  branch
     repo.git.checkout("main")
