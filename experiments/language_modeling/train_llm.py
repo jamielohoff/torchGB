@@ -163,7 +163,7 @@ val_dataset = load_dataset("arrow",
                             cache_dir=cache_dir, 
                             split="validation",
                             streaming=True)
-val_dataset = val_dataset.take(4096*32)
+val_dataset = val_dataset.take(4096*128//world_size)
 
 test_dataset = load_dataset("arrow", 
                             data_dir=data_dir, 
@@ -288,9 +288,9 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             ppl = np.exp(cur_loss)
             if args.prompt is not None:
                 predicted_seq = predict_sequence(args.prompt, tokenizer, model, rank, seq_size=32)
+                logger.debug(predicted_seq)
             if rank == 0:
                 run.log({"train_loss": cur_loss, "train ppl": ppl})
-                logger.debug(predicted_seq)
                 logger.debug(f"| epoch {epoch:3d} | {batch:5d} batches | "
                             f"ms/batch {ms_per_batch:5.2f} | "
                             f"loss {cur_loss:5.2f} | ppl {ppl:8.2f}")
@@ -383,7 +383,7 @@ compression_factor = gnets.compression(model) if enable_gnets else 1.0
 
 # Compute initial validation loss
 start_time = time.time()
-val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=16, prefetch_factor=4, batchsize=EVAL_BATCHSIZE)
+val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=8, prefetch_factor=4, batchsize=EVAL_BATCHSIZE)
 val_loss = evaluate(model, val_loader)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
 val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL

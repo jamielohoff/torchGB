@@ -25,7 +25,7 @@ args = parser.parse_args()
 
 
 # Initialize the data directory
-base_config = load_config("base_config.yaml")
+base_config = load_config("base_config.yml")
 data_dir = args.source_path
 print("Data directory:", data_dir)
 
