@@ -119,8 +119,9 @@ logger.debug(f"Cache directory: {cache_dir}")
 
 # Commit the current codebase to the experiments branch
 if rank == 0 and args.no_commit:
-    logger.info(f"Committing current codebase under {base_config["project_root"]} to the `experiments` branch...")
-    commit_hash = commit_to_experiments_branch(base_config["project_root"])
+    project_root = base_config["project_root"]
+    logger.info(f"Committing current codebase under {project_root} to the `experiments` branch...")
+    commit_hash = commit_to_experiments_branch(project_root)
 else:
     commit_hash = "test"
 
