@@ -415,7 +415,6 @@ if rank == 0:
                     config=run_config, 
                     mode=args.wandb,
                     dir=base_config["wandb_path"],
-                    id=args.wandb_id,
                     name=run_name,
                     settings=wandb.Settings(_disable_stats=True))
     run.log({"validation_loss": val_loss, "val ppl": val_ppl})
