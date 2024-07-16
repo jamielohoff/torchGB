@@ -35,9 +35,6 @@ parser.add_argument("--language", type=str, default="en", help="Which language t
 
 parser.add_argument("--batchsize", type=int, default=16, help="Training batchsize.")
 
-parser.add_argument("--compression_size", type=int, default=64, 
-                    help="Size of the hidden layer of the genomic bottleneck MLPs.")
-
 parser.add_argument("--load_gnets", type=str, default=None, 
                     help="Path to the gnet weights.")
 
@@ -98,7 +95,6 @@ logger.debug(f"Rank: {rank} World Size: {world_size}")
 
 # Initialize experiment hyperparameters
 experiment_config = load_config("experiment_config.yml")
-COMPRESSION_LAYER_SIZE = args.compression_size
 EPOCHS = experiment_config["epochs"]
 BATCHSIZE = args.batchsize
 EVAL_BATCHSIZE = args.batchsize * 4
@@ -400,7 +396,6 @@ if rank == 0:
     run_config = {"commit_hash": commit_hash,
                     "batchsize": BATCHSIZE,
                     "language": args.language,
-                    "compression_layer_size": COMPRESSION_LAYER_SIZE,
                     "compression_factor": compression_factor,
                     "num_params": num_params,
                     "ignored layers": args.ignore_layers,
