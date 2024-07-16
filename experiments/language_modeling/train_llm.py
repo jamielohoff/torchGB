@@ -163,7 +163,7 @@ val_dataset = load_dataset("arrow",
                             cache_dir=cache_dir, 
                             split="validation",
                             streaming=True)
-val_dataset = val_dataset.take(4096//world_size) # *128
+val_dataset = val_dataset.take(4096*128//world_size)
 
 test_dataset = load_dataset("arrow", 
                             data_dir=data_dir, 
@@ -291,7 +291,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 logger.debug(predicted_seq)
             if rank == 0:
                 run.log({"train_loss": cur_loss, "train ppl": ppl})
-                logger.debug(f"| epoch {epoch:3d} | {batch:5d} batches | "
+                logger.debug(f"epoch {epoch:3d} | {batch:5d} batches | "
                             f"ms/batch {ms_per_batch:5.2f} | "
                             f"loss {cur_loss:5.2f} | ppl {ppl:8.2f}")
             dist.barrier()
@@ -304,10 +304,9 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             val_loss = evaluate(model, val_loader)
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
             val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
-
-            logger.info("Validation of joint P-Net and G-Net training:")
-            logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
+            
             if rank == 0:
+                logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
                 run.log({"validation_loss": val_loss, "val ppl": val_ppl})
 
             global best_val_loss
@@ -348,13 +347,15 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
 
 
 # Loop over epochs. Save the model if the validation loss is the best we've seen so far.
-ignore_layers = ["encoder.weight", "decoder.weight", "norm", "bias"]
-ignore_layers += [f".{l}." for l in args.ignore_layers.split(",")]
-logger.debug(f"Ignoring layers: {ignore_layers}")
-gnets = GenomicBottleneck(model, 
-                        COMPRESSION_LAYER_SIZE, 
-                        lr=experiment_config["gnets_lr"],
-                        ignore_layers=ignore_layers) if (enable_gnets or init_with_gnets) else None
+ignore_layers = [f".{l}." for l in args.ignore_layers.split(",")]
+experiment_config["gnets"]["ignore_layers"] += ignore_layers
+logger.debug(f"Ignoring layers: {experiment_config["gnets"]["ignore_layers"]}")
+
+
+# Initialize the G-Nets if applicable
+gnets = None
+if enable_gnets or init_with_gnets:
+    gnets = GenomicBottleneck(model, **experiment_config["gnets"])
 
 
 # Load G-Net weights if applicable and predict the weights
@@ -371,7 +372,7 @@ if args.load_gnets is not None:
 
 # Delete the G-Nets after initialization if we only initialize the model with them
 if init_with_gnets:
-    logger.debug("Deleting G-Nets...")
+    logger.info("Deleting G-Nets...")
     gnets = None
     enable_gnets = False
 
@@ -421,7 +422,7 @@ if rank == 0:
                     name=run_name,
                     settings=wandb.Settings(_disable_stats=True))
     run.log({"validation_loss": val_loss, "val ppl": val_ppl})
-    
+
 
 # Actual training loop
 for epoch in range(1, EPOCHS + 1):
