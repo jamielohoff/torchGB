@@ -163,7 +163,7 @@ val_dataset = load_dataset("arrow",
                             cache_dir=cache_dir, 
                             split="validation",
                             streaming=True)
-val_dataset = val_dataset.take(4096*128//world_size)
+val_dataset = val_dataset.take(4096//world_size) # *128
 
 test_dataset = load_dataset("arrow", 
                             data_dir=data_dir, 
