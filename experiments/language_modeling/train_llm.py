@@ -243,10 +243,9 @@ else:
     scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
 
 
-# Loop over epochs. Save the model if the validation loss is the best we've seen so far.
+# Which layers to ignore when assigning gnets
 ignore_layers = [f".{l}." for l in args.ignore_layers.split(",")]
 experiment_config["gnets"]["ignore_layers"] += ignore_layers
-logger.debug(f"Ignoring layers: {experiment_config["gnets"]["ignore_layers"]}")
 
 
 # Initialize the G-Nets if applicable
