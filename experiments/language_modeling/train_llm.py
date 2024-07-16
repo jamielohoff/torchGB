@@ -52,7 +52,7 @@ parser.add_argument("--disable_gnets", action="store_false",
 parser.add_argument("--init_with_gnets", action="store_false",
                     help="Initialize the model with the weights predicted by the gnets.")
 
-parser.add_argument("--checkpoint_model", action="store_false",
+parser.add_argument("--checkpoint_model", action="store_true",
                     help="Whether to store the model weights and optimizer.")
 
 parser.add_argument("--ignore_layers", type=str, default="",
@@ -69,7 +69,7 @@ parser.add_argument("--no_commit", action="store_false",
 
 parser.add_argument("--loglevel", type=str, default="INFO", help="Set log level.")
 
-parser.add_argument("--load_dataset_state", action="store_true",
+parser.add_argument("--load_dataloader_state", action="store_true",
                     help="Whether to load the dataset state from a checkpoint.")
 
 args = parser.parse_args()
@@ -159,7 +159,7 @@ val_dataset = load_dataset("arrow",
                             cache_dir=cache_dir, 
                             split="validation",
                             streaming=True)
-val_dataset = val_dataset.take(4096*128//world_size)
+val_dataset = val_dataset.take(4096//world_size) # *128
 
 test_dataset = load_dataset("arrow", 
                             data_dir=data_dir, 
@@ -205,7 +205,7 @@ scheduler = None
 # Dealing with custom model loading
 if args.load_model is not None:
     # Load dataset state if applicable
-    if args.load_dataset_state:
+    if args.load_dataloader_state:
         try:
             SEED = torch.load(args.load_model, map_location=torch.device(rank))["seed"]
             train_dataset.shuffle(seed=SEED, buffer_size=10000)
@@ -243,10 +243,48 @@ else:
     scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
 
 
+# Loop over epochs. Save the model if the validation loss is the best we've seen so far.
+ignore_layers = [f".{l}." for l in args.ignore_layers.split(",")]
+experiment_config["gnets"]["ignore_layers"] += ignore_layers
+logger.debug(f"Ignoring layers: {experiment_config["gnets"]["ignore_layers"]}")
+
+
+# Initialize the G-Nets if applicable
+gnets = None
+if enable_gnets or init_with_gnets:
+    gnets = GenomicBottleneck(model, **experiment_config["gnets"])
+
+
+# Load G-Net weights if applicable and predict the weights
+if args.load_gnets is not None:
+    try:
+        logger.debug(f"Loading G-Net weights from {args.load_gnets}")
+        gnets.load(args.load_gnets)
+        logger.debug("Predicting weights...")
+        with torch.no_grad():
+            gnets.predict_weights(model)
+    except:
+        raise f"No G-Net existing under {args.load_gnets}"
+
+
+# Delete the G-Nets after initialization if we only initialize the model with them
+if init_with_gnets:
+    logger.info("Deleting G-Nets...")
+    gnets = None
+    enable_gnets = False
+
+
+# Calculate model num_params and compression factor if applicable
+num_params = sum(p.numel() for p in model.parameters())
+compression_factor = gnets.compression(model) if enable_gnets else 1.0
+
+
 # Other stuff that is required
 best_val_loss = float("inf")
 src_mask = generate_square_subsequent_mask(SEQ_LEN).to(rank)
 
+
+# Training function
 def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     if enable_gnets: gnets.train()
     total_loss = 0.
@@ -325,6 +363,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                     time.sleep(1)
                 
 
+# Evaluation function
 def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
     model.eval() # turn on evaluation mode
     total_loss, norm = 0, 0
@@ -340,42 +379,6 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
             norm += 1
     logger.info(f"Validation time: {time.time() - start_time}")
     return torch.tensor([total_loss / norm]).to(rank)
-
-
-# Loop over epochs. Save the model if the validation loss is the best we've seen so far.
-ignore_layers = [f".{l}." for l in args.ignore_layers.split(",")]
-experiment_config["gnets"]["ignore_layers"] += ignore_layers
-logger.debug(f"Ignoring layers: {experiment_config["gnets"]["ignore_layers"]}")
-
-
-# Initialize the G-Nets if applicable
-gnets = None
-if enable_gnets or init_with_gnets:
-    gnets = GenomicBottleneck(model, **experiment_config["gnets"])
-
-
-# Load G-Net weights if applicable and predict the weights
-if args.load_gnets is not None:
-    try:
-        logger.debug(f"Loading G-Net weights from {args.load_gnets}")
-        gnets.load(args.load_gnets)
-        logger.debug("Predicting weights...")
-        with torch.no_grad():
-            gnets.predict_weights(model)
-    except:
-        raise f"No G-Net existing under {args.load_gnets}"
-
-
-# Delete the G-Nets after initialization if we only initialize the model with them
-if init_with_gnets:
-    logger.info("Deleting G-Nets...")
-    gnets = None
-    enable_gnets = False
-
-
-# Calculate model num_params and compression factor if applicable
-num_params = sum(p.numel() for p in model.parameters())
-compression_factor = gnets.compression(model) if enable_gnets else 1.0
  
 
 # Compute initial validation loss
@@ -413,7 +416,6 @@ if rank == 0:
                     mode=args.wandb,
                     dir=base_config["wandb_path"],
                     id=args.wandb_id,
-                    resume="allow",
                     name=run_name,
                     settings=wandb.Settings(_disable_stats=True))
     run.log({"validation_loss": val_loss, "val ppl": val_ppl})
@@ -437,7 +439,7 @@ model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank
 
 test_loss = evaluate(model.to(rank), test_loader) 
 test_ppl = np.exp(test_loss) # word-level PPL
-logger.info(f"| End of training | test loss {test_loss:5.2f} | test ppl {test_ppl:8.2f}")
+logger.info(f"End of training | test loss {test_loss:5.2f} | test ppl {test_ppl:8.2f}")
 run.finish()
 dist.destroy_process_group()
 
