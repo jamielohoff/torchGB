@@ -133,7 +133,6 @@ if init_with_gnets:
     logger.info(f"Initializing with G-Net weights: {args.load_gnets}")
     assert args.load_gnets is not None, "Please enter a path to the weights for the G-Nets."
 experiment_name = "GBT_" + args.name if enable_gnets else args.name
-logger.info(f"Starting experiment {experiment_name}")
 
 
 # Set the model and gnet checkpoint paths
@@ -145,6 +144,7 @@ MODEL_CHCKPT_PATH  = os.path.join(base_config["save_model"], fname)
 
 # Check if the files already exist
 if rank == 0:
+    logger.info(f"Starting experiment {experiment_name}")
     if os.path.isfile(GNET_CHCKPT_PATH):
         logger.warning(f"File {GNET_CHCKPT_PATH} already exists.")
     if os.path.isfile(MODEL_CHCKPT_PATH):
@@ -419,8 +419,7 @@ if rank == 0:
                     id=args.wandb_id,
                     resume="allow",
                     name=run_name,
-                    settings=wandb.Settings(_disable_stats=True, _disable_meta=True))
-
+                    settings=wandb.Settings(_disable_stats=True))
     run.log({"validation_loss": val_loss, "val ppl": val_ppl})
     
 
