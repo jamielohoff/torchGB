@@ -177,7 +177,7 @@ def get_dataloader(dataset, rank, world_size, num_workers=1, prefetch_factor=1, 
                 num_workers=num_workers,
                 prefetch_factor=prefetch_factor)
 
-train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=8, prefetch_factor=4, stateful=True)
+train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=4, prefetch_factor=2, stateful=True)
 
 
 # val_num_words = sum(len(line["text"].split(" ")) for line in oscar_dataset["validation"])
@@ -208,7 +208,7 @@ if args.load_model is not None:
         try:
             SEED = torch.load(args.load_model, map_location=torch.device(rank))["seed"]
             train_dataset.shuffle(seed=SEED, buffer_size=10000)
-            train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=8, prefetch_factor=4, stateful=True)
+            train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=4, prefetch_factor=2, stateful=True)
             train_loader.load_state_dict(torch.load(args.load_model, map_location=torch.device("cpu"))["dataloader"])
             logger.info(f"Loaded dataloader state from {args.load_model} with random seed {SEED}")
         except:
@@ -323,10 +323,10 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 predicted_seq = predict_sequence(args.prompt, tokenizer, model, rank, seq_size=32)
                 logger.debug(predicted_seq)
             if rank == 0:
-                run.log({"train_loss": cur_loss, "train ppl": ppl})
                 logger.debug(f"epoch {epoch:3d} | {batch:5d} batches | "
                             f"ms/batch {ms_per_batch:5.2f} | "
                             f"loss {cur_loss:5.2f} | ppl {ppl:8.2f}")
+                run.log({"train_loss": cur_loss, "train ppl": ppl}, commit=True)
             dist.barrier()
             
             total_loss = 0
@@ -340,7 +340,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             
             if rank == 0:
                 logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
-                run.log({"validation_loss": val_loss, "val ppl": val_ppl})
+                run.log({"validation_loss": val_loss, "val ppl": val_ppl}, commit=True)
                 
             global best_val_loss
             if val_loss < best_val_loss:
@@ -381,11 +381,11 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
  
 
 # Compute initial validation loss
-val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=8, prefetch_factor=4, batchsize=EVAL_BATCHSIZE)
+val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=4, prefetch_factor=2, batchsize=EVAL_BATCHSIZE)
 val_loss = evaluate(model, val_loader)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
 val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
-val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=8, prefetch_factor=4)
+val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=4, prefetch_factor=2)
 
 
 # Initialize Wandb on rank 0
@@ -425,8 +425,8 @@ for epoch in range(1, EPOCHS + 1):
     SEED += 1
     train_dataset = train_dataset.shuffle(seed=SEED, buffer_size=10000)
     val_dataset = val_dataset.shuffle(seed=SEED, buffer_size=10000)
-    train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=8, prefetch_factor=4, stateful=True)
-    val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=8, prefetch_factor=4)
+    train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=4, prefetch_factor=2, stateful=True)
+    val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=4, prefetch_factor=2)
       
   
 # Evaluate the best model on the test dataset
@@ -437,6 +437,5 @@ model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank
 test_loss = evaluate(model.to(rank), test_loader) 
 test_ppl = np.exp(test_loss) # word-level PPL
 logger.info(f"End of training | test loss {test_loss:5.2f} | test ppl {test_ppl:8.2f}")
-run.finish()
 dist.destroy_process_group()
 
