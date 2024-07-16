@@ -139,8 +139,7 @@ MODEL_CHCKPT_PATH  = os.path.join(base_config["save_model"], fname)
 
 
 # Check if the files already exist
-if rank == 0:
-    logger.info(f"Starting experiment {experiment_name}")
+if rank == 0 and args.checkpoint_model:
     if os.path.isfile(GNET_CHCKPT_PATH):
         logger.warning(f"File {GNET_CHCKPT_PATH} already exists.")
     if os.path.isfile(MODEL_CHCKPT_PATH):
@@ -289,6 +288,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     total_loss = 0.
     start_time = time.time()
     pbar = enumerate(train_loader)
+    
     for batch, data in pbar:
         model.train()
         data = torch.stack(data["input_ids"]).t().to(rank)
@@ -341,12 +341,12 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             if rank == 0:
                 logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
                 run.log({"validation_loss": val_loss, "val ppl": val_ppl})
-
+                
             global best_val_loss
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
    
-                if enable_gnets:
+                if args.checkpoint_model and enable_gnets:
                     logger.debug(f"Saving G-Net weights under {GNET_CHCKPT_PATH}")
                     gnets.save(GNET_CHCKPT_PATH) 
                 
@@ -381,7 +381,6 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
  
 
 # Compute initial validation loss
-start_time = time.time()
 val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=8, prefetch_factor=4, batchsize=EVAL_BATCHSIZE)
 val_loss = evaluate(model, val_loader)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
@@ -393,7 +392,7 @@ val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=8, prefet
 if rank == 0:
     logger.info(f"Number of model parameters: {num_params}")   
     logger.info(f"G-Net compression: {compression_factor}") 
-    logger.info(f"Validation loss: {val_loss} Validation PPL: {val_ppl} Time: {time.time() - start_time}")
+    logger.info(f"Validation loss: {val_loss} Validation PPL: {val_ppl}")
     
     run_config = {"commit_hash": commit_hash,
                     "batchsize": BATCHSIZE,
