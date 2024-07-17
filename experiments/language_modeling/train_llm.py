@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.distributed as dist
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from torchdata.stateful_dataloader import StatefulDataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -129,6 +130,12 @@ if init_with_gnets:
     logger.info(f"Initializing with G-Net weights: {args.load_gnets}")
     assert args.load_gnets is not None, "Please enter a path to the weights for the G-Nets."
 experiment_name = "GBT_" + args.name if enable_gnets else args.name
+
+
+
+writer = SummaryWriter(log_dir=base_config["wandb_path"],
+                        filename_suffix=experiment_name,
+                        flush_secs=60)
 
 
 # Set the model and gnet checkpoint paths
