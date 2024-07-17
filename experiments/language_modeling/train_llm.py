@@ -90,7 +90,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "true"
 dist.init_process_group(backend="nccl")
 rank = dist.get_rank()
 world_size = dist.get_world_size()
-logger.debug(f"Rank: {rank} World Size: {world_size}")
+logger.debug(f"Rank: {rank}, World Size: {world_size}")
 
 
 # Initialize experiment hyperparameters
@@ -128,7 +128,15 @@ enable_gnets = args.disable_gnets if not init_with_gnets else False
 if init_with_gnets:
     logger.info(f"Initializing with G-Net weights: {args.load_gnets}")
     assert args.load_gnets is not None, "Please enter a path to the weights for the G-Nets."
-experiment_name = "GBT_" + args.name if enable_gnets else args.name
+experiment_name = args.name if enable_gnets else args.name
+
+if enable_gnets:
+    experiment_name = "GBT_" + experiment_name
+elif init_with_gnets:
+    experiment_name = "gnetinit_" + experiment_name
+else:
+    experiment_name = "baseline_" + experiment_name
+    
 
 
 # Set the model and gnet checkpoint paths
@@ -368,7 +376,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                     torch.save(param_dict, MODEL_CHCKPT_PATH)
                 else:
                     time.sleep(1)
-                
+
 
 # Evaluation function
 def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
@@ -386,7 +394,7 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
             norm += 1
     logger.info(f"Validation time: {time.time() - start_time}")
     return torch.tensor([total_loss / norm]).to(rank)
- 
+
 
 # Compute initial validation loss
 val_loader = get_dataloader(val_dataset, rank, world_size, batchsize=EVAL_BATCHSIZE)
@@ -396,7 +404,7 @@ val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
 val_loader = get_dataloader(val_dataset, rank, world_size)
 
 
-# Initialize Wandb on rank 0
+# Initialize metrics logging on rank 0
 if rank == 0:
     logger.info(f"Number of model parameters: {num_params}")   
     logger.info(f"G-Net compression: {compression_factor}") 
@@ -433,8 +441,8 @@ for epoch in range(1, EPOCHS + 1):
     train_loader = get_dataloader(train_dataset, rank, world_size, stateful=True)
     val_loader = get_dataloader(val_dataset, rank, world_size)
     writer.flush()
-      
-  
+
+
 # Evaluate the best model on the test dataset
 test_dataset = test_dataset.shuffle(seed=args.seed, buffer_size=10000)
 test_loader = get_dataloader(test_dataset, rank, world_size, batchsize=EVAL_BATCHSIZE)
