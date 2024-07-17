@@ -4,7 +4,6 @@ import time
 import argparse
 from loguru import logger
 
-import wandb
 import numpy as np 
 
 import torch
@@ -116,7 +115,7 @@ logger.debug(f"Cache directory: {cache_dir}")
 
 # Commit the current codebase to the experiments branch
 if rank == 0 and args.no_commit:
-    project_root = base_config["project_root"]
+    project_root = base_config["project_root_dir"]
     logger.info(f"Committing current codebase under {project_root} to the `experiments` branch...")
     commit_hash = commit_to_experiments_branch(project_root)
 else:
@@ -132,17 +131,11 @@ if init_with_gnets:
 experiment_name = "GBT_" + args.name if enable_gnets else args.name
 
 
-
-writer = SummaryWriter(log_dir=base_config["wandb_path"],
-                        filename_suffix=experiment_name,
-                        flush_secs=60)
-
-
 # Set the model and gnet checkpoint paths
 fname = experiment_name + "_gnets_" + args.language + ".pth"
-GNET_CHCKPT_PATH  = os.path.join(base_config["save_gnets"], fname)
+GNET_CHCKPT_PATH  = os.path.join(base_config["save_gnets_dir"], fname)
 fname = experiment_name + "_model_" + args.language + ".pth"
-MODEL_CHCKPT_PATH  = os.path.join(base_config["save_model"], fname)
+MODEL_CHCKPT_PATH  = os.path.join(base_config["save_model_dir"], fname)
 
 
 # Check if the files already exist
@@ -175,7 +168,13 @@ test_dataset = load_dataset("arrow",
 
 
 # Creating dataloaders
-def get_dataloader(dataset, rank, world_size, num_workers=1, prefetch_factor=1, batchsize=BATCHSIZE, stateful=False):
+def get_dataloader(dataset, 
+                    rank: int, 
+                    world_size: int, 
+                    num_workers: int = 8, 
+                    prefetch_factor: int = 2, 
+                    batchsize: int = BATCHSIZE, 
+                    stateful: bool = False) -> DataLoader:
     node_data = split_dataset_by_node(dataset, rank=rank, world_size=world_size)
     loader = StatefulDataLoader if stateful else DataLoader
     return loader(node_data, 
@@ -184,7 +183,7 @@ def get_dataloader(dataset, rank, world_size, num_workers=1, prefetch_factor=1, 
                 num_workers=num_workers,
                 prefetch_factor=prefetch_factor)
 
-train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=4, prefetch_factor=2, stateful=True)
+train_loader = get_dataloader(train_dataset, rank, world_size, stateful=True)
 
 
 # val_num_words = sum(len(line["text"].split(" ")) for line in oscar_dataset["validation"])
@@ -194,8 +193,8 @@ train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=4, pr
 
 
 # Initialize tokenizer
-tokenizer_path = os.path.join(base_config["tokenizer_path"], "oscar_2301_" + args.language)
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+tokenizer_dir = os.path.join(base_config["tokenizer_dir"], "oscar_2301_" + args.language)
+tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
 tokenizer.pad_token = tokenizer.eos_token
 
 
@@ -215,7 +214,7 @@ if args.load_model is not None:
         try:
             SEED = torch.load(args.load_model, map_location=torch.device(rank))["seed"]
             train_dataset.shuffle(seed=SEED, buffer_size=10000)
-            train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=4, prefetch_factor=2, stateful=True)
+            train_loader = get_dataloader(train_dataset, rank, world_size, stateful=True)
             train_loader.load_state_dict(torch.load(args.load_model, map_location=torch.device("cpu"))["dataloader"])
             logger.info(f"Loaded dataloader state from {args.load_model} with random seed {SEED}")
         except:
@@ -333,7 +332,8 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 logger.debug(f"epoch {epoch:3d} | {batch:5d} batches | "
                             f"ms/batch {ms_per_batch:5.2f} | "
                             f"loss {cur_loss:5.2f} | ppl {ppl:8.2f}")
-                run.log({"train_loss": cur_loss, "train ppl": ppl}, commit=True)
+                writer.add_scalar("loss/train", cur_loss)
+                writer.add_scalar("ppl/train", ppl)
             dist.barrier()
             
             total_loss = 0
@@ -347,7 +347,8 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             
             if rank == 0:
                 logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
-                run.log({"validation_loss": val_loss, "val ppl": val_ppl}, commit=True)
+                writer.add_scalar("loss/val", val_loss)
+                writer.add_scalar("ppl/val", val_ppl)
                 
             global best_val_loss
             if val_loss < best_val_loss:
@@ -388,18 +389,18 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
  
 
 # Compute initial validation loss
-val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=4, prefetch_factor=2, batchsize=EVAL_BATCHSIZE)
+val_loader = get_dataloader(val_dataset, rank, world_size, batchsize=EVAL_BATCHSIZE)
 val_loss = evaluate(model, val_loader)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
 val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
-val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=4, prefetch_factor=2)
+val_loader = get_dataloader(val_dataset, rank, world_size)
 
 
 # Initialize Wandb on rank 0
 if rank == 0:
     logger.info(f"Number of model parameters: {num_params}")   
     logger.info(f"G-Net compression: {compression_factor}") 
-    logger.info(f"Validation loss: {val_loss} Validation PPL: {val_ppl}")
+    logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
     
     run_config = {"commit_hash": commit_hash,
                     "batchsize": BATCHSIZE,
@@ -410,19 +411,16 @@ if rank == 0:
                     "seed": args.seed,
                     **experiment_config,
                     **base_config}
-    
-    wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
-                host="https://wandb.fz-juelich.de")
+
     run_name = experiment_name + "_" + args.language
-    run = wandb.init(entity="ja-lohoff", 
-                    project="GenomicBottleneck", 
-                    group="oscar", 
-                    config=run_config, 
-                    mode=args.wandb,
-                    dir=base_config["wandb_path"],
-                    name=run_name,
-                    settings=wandb.Settings(_disable_stats=True))
-    run.log({"validation_loss": val_loss, "val ppl": val_ppl})
+    
+    writer = SummaryWriter(log_dir=base_config["log_dir"],
+                            comment=run_name,
+                            filename_suffix=run_name,
+                            flush_secs=60)
+    writer.add_text("global/config", str(run_config))
+    writer.add_scalar("loss/val", val_loss)
+    writer.add_scalar("ppl/val", val_ppl)
 
 
 # Actual training loop
@@ -432,17 +430,20 @@ for epoch in range(1, EPOCHS + 1):
     SEED += 1
     train_dataset = train_dataset.shuffle(seed=SEED, buffer_size=10000)
     val_dataset = val_dataset.shuffle(seed=SEED, buffer_size=10000)
-    train_loader = get_dataloader(train_dataset, rank, world_size, num_workers=4, prefetch_factor=2, stateful=True)
-    val_loader = get_dataloader(val_dataset, rank, world_size, num_workers=4, prefetch_factor=2)
+    train_loader = get_dataloader(train_dataset, rank, world_size, stateful=True)
+    val_loader = get_dataloader(val_dataset, rank, world_size)
+    writer.flush()
       
   
 # Evaluate the best model on the test dataset
 test_dataset = test_dataset.shuffle(seed=args.seed, buffer_size=10000)
-test_loader = get_dataloader(test_dataset, rank, world_size, num_workers=4, prefetch_factor=2, batchsize=EVAL_BATCHSIZE)
+test_loader = get_dataloader(test_dataset, rank, world_size, batchsize=EVAL_BATCHSIZE)
 model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["model"])
 
 test_loss = evaluate(model.to(rank), test_loader) 
 test_ppl = np.exp(test_loss) # word-level PPL
 logger.info(f"End of training | test loss {test_loss:5.2f} | test ppl {test_ppl:8.2f}")
 dist.destroy_process_group()
+writer.flush()
+writer.close()
 
