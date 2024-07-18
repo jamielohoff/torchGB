@@ -102,6 +102,7 @@ SEQ_LEN = experiment_config["model"]["seq_len"]
 LOG_INTERVAL = experiment_config["log_interval"]
 VAL_INTERVAL = experiment_config["val_interval"]
 SEED = args.seed
+global_step = 0
 
 
 # Initialize the data directory
@@ -166,7 +167,7 @@ val_dataset = load_dataset("arrow",
                             cache_dir=cache_dir, 
                             split="validation",
                             streaming=True)
-val_dataset = val_dataset.take(4096*128//world_size)
+val_dataset = val_dataset.take(4096//world_size) # *128
 
 test_dataset = load_dataset("arrow", 
                             data_dir=data_dir, 
@@ -180,7 +181,7 @@ def get_dataloader(dataset,
                     rank: int, 
                     world_size: int, 
                     num_workers: int = 8, 
-                    prefetch_factor: int = 2, 
+                    prefetch_factor: int = 4, 
                     batchsize: int = BATCHSIZE, 
                     stateful: bool = False) -> DataLoader:
     node_data = split_dataset_by_node(dataset, rank=rank, world_size=world_size)
@@ -301,10 +302,10 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     if enable_gnets: gnets.train()
     total_loss = 0.
     start_time = time.time()
-    pbar = enumerate(train_loader)
     
-    for batch, data in pbar:
+    for data in train_loader:
         model.train()
+        global_step += 1
         data = torch.stack(data["input_ids"]).t().to(rank)
         optimizer.zero_grad()
 
@@ -326,7 +327,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         
         total_loss += loss.item()
         # Logging
-        if batch % LOG_INTERVAL == 0 and batch > 0:
+        if global_step % LOG_INTERVAL == 0:
             ms_per_batch = (time.time() - start_time) * 1000 / LOG_INTERVAL
             cur_loss = torch.tensor([total_loss / LOG_INTERVAL]).to(rank)
             dist.barrier()
@@ -337,26 +338,26 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 predicted_seq = predict_sequence(args.prompt, tokenizer, model, rank, seq_size=32)
                 logger.debug(predicted_seq)
             if rank == 0:
-                logger.debug(f"epoch {epoch:3d} | {batch:5d} batches | "
+                logger.debug(f"epoch {epoch:3d} | {global_step:5d} batches | "
                             f"ms/batch {ms_per_batch:5.2f} | "
                             f"loss {cur_loss:5.2f} | ppl {ppl:8.2f}")
-                writer.add_scalar("loss/train", cur_loss)
-                writer.add_scalar("ppl/train", ppl)
+                writer.add_scalar("loss/train", cur_loss, global_step=global_step)
+                writer.add_scalar("ppl/train", ppl, global_step=global_step)
             dist.barrier()
             
             total_loss = 0
             start_time = time.time()
 
         # Validation
-        if batch % VAL_INTERVAL == 0 and batch > 0:
+        if global_step % VAL_INTERVAL == 0:
             val_loss = evaluate(model, val_loader)
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
             val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
             
             if rank == 0:
                 logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
-                writer.add_scalar("loss/val", val_loss)
-                writer.add_scalar("ppl/val", val_ppl)
+                writer.add_scalar("loss/val", val_loss, global_step=global_step)
+                writer.add_scalar("ppl/val", val_ppl, global_step=global_step)
                 
             global best_val_loss
             if val_loss < best_val_loss:
@@ -422,17 +423,18 @@ if rank == 0:
 
     run_name = experiment_name + "_" + args.language
     
-    writer = SummaryWriter(log_dir=base_config["log_dir"],
+    log_dir = os.path.join(base_config["log_dir"], run_name)
+    writer = SummaryWriter(log_dir=log_dir,
                             comment=run_name,
                             filename_suffix=run_name,
                             flush_secs=60)
     writer.add_text("global/config", str(run_config))
-    writer.add_scalar("loss/val", val_loss)
-    writer.add_scalar("ppl/val", val_ppl)
+    writer.add_scalar("loss/val", val_loss, global_step=global_step)
+    writer.add_scalar("ppl/val", val_ppl, global_step=global_step)
 
 
 # Actual training loop
-for epoch in range(1, EPOCHS + 1):
+for epoch in range(EPOCHS):
     dist.barrier()
     train(model, gnets)
     SEED += 1
