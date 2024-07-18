@@ -82,11 +82,11 @@ class GenomicBottleneck(nn.Module):
                 # that removes the bias towards the first device
                 device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
                 if device_id == 0:
-                    if i0 > 2:
+                    # if i0 > 2:
                         device_id = np.where(load_per_rank[1:] == load_per_rank[1:].min())[0][-1]
                         device_id += 1
-                    else:
-                        i0 += 1
+                    # else:
+                        # i0 += 1
                 load_per_rank[device_id] += param.data.numel()
                 
                 if device_id == dist.get_rank():
