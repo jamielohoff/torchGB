@@ -41,11 +41,6 @@ parser.add_argument("--load_gnets", type=str, default=None,
 parser.add_argument("--load_model", type=str, default=None,
                     help="Path to the model weights.")
 
-parser.add_argument("--wandb", type=str, default="run", help="Wandb mode.")
-
-parser.add_argument("--wandb_id", type=str, default=None,
-                    help="Wandb id to resume a crashed run.")
-
 parser.add_argument("--disable_gnets", action="store_false",
                     help="Use genomic bottleneck compression?")
 
