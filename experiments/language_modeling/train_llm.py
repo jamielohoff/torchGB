@@ -167,7 +167,7 @@ val_dataset = load_dataset("arrow",
                             cache_dir=cache_dir, 
                             split="validation",
                             streaming=True)
-val_dataset = val_dataset.take(4096//world_size) # *128
+val_dataset = val_dataset.take(experiment_config["val_dataset_len"]//world_size)
 
 test_dataset = load_dataset("arrow", 
                             data_dir=data_dir, 
@@ -305,6 +305,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     
     for data in train_loader:
         model.train()
+        global global_step
         global_step += 1
         data = torch.stack(data["input_ids"]).t().to(rank)
         optimizer.zero_grad()
