@@ -41,11 +41,6 @@ parser.add_argument("--load_gnets", type=str, default=None,
 parser.add_argument("--load_model", type=str, default=None,
                     help="Path to the model weights.")
 
-parser.add_argument("--wandb", type=str, default="run", help="Wandb mode.")
-
-parser.add_argument("--wandb_id", type=str, default=None,
-                    help="Wandb id to resume a crashed run.")
-
 parser.add_argument("--disable_gnets", action="store_false",
                     help="Use genomic bottleneck compression?")
 
@@ -97,7 +92,6 @@ logger.debug(f"Rank: {rank}, World Size: {world_size}")
 experiment_config = load_config("experiment_config.yml")
 EPOCHS = experiment_config["epochs"]
 BATCHSIZE = args.batchsize
-EVAL_BATCHSIZE = args.batchsize * 4
 SEQ_LEN = experiment_config["model"]["seq_len"]
 LOG_INTERVAL = experiment_config["log_interval"]
 VAL_INTERVAL = experiment_config["val_interval"]
@@ -321,7 +315,6 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         nn.utils.clip_grad_norm_(model.parameters(), 0.25)
         if enable_gnets: gnets.backward(model)
         
-        dist.barrier()
         optimizer.step()
         if scheduler is not None: scheduler.step()
         if enable_gnets: gnets.step()
@@ -399,7 +392,7 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
 
 
 # Compute initial validation loss
-val_loader = get_dataloader(val_dataset, rank, world_size, batchsize=EVAL_BATCHSIZE)
+val_loader = get_dataloader(val_dataset, rank, world_size)
 val_loss = evaluate(model, val_loader)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
 val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
@@ -419,6 +412,7 @@ if rank == 0:
                     "num_params": num_params,
                     "ignored layers": args.ignore_layers,
                     "seed": args.seed,
+                    "world_size": world_size,
                     **experiment_config,
                     **base_config}
 
@@ -448,7 +442,7 @@ for epoch in range(EPOCHS):
 
 # Evaluate the best model on the test dataset
 test_dataset = test_dataset.shuffle(seed=args.seed, buffer_size=10000)
-test_loader = get_dataloader(test_dataset, rank, world_size, batchsize=EVAL_BATCHSIZE)
+test_loader = get_dataloader(test_dataset, rank, world_size)
 model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["model"])
 
 test_loss = evaluate(model.to(rank), test_loader) 

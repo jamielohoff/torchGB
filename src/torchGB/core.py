@@ -66,7 +66,7 @@ class GenomicBottleneck(nn.Module):
     def __init__(self, 
                 model: nn.Module, 
                 hidden_dim: int = 64, 
-                lr: float = 1e-3,
+                lr: float = 2.5-4,
                 ignore_layers: Optional[Sequence[str]] = []) -> None:
         super(GenomicBottleneck, self).__init__()             
         
