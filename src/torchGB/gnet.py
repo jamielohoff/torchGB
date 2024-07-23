@@ -73,7 +73,7 @@ def conv2d_gnet_layer(param_shape, hidden_dim, output_scale):
     return row_col_encoding, gnet
     
     
-max_gnet_batch = 100000
+max_gnet_batch = 40_000
 
 
 
