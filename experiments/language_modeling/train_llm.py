@@ -125,14 +125,14 @@ if init_with_gnets:
     assert args.load_gnets is not None, "Please enter a path to the weights for the G-Nets."
 experiment_name = args.name if enable_gnets else args.name
 
-if enable_gnets:
-    experiment_name = "GBT_" + experiment_name
-elif init_with_gnets:
+
+if init_with_gnets:
     experiment_name = "gnetinit_" + experiment_name
+elif enable_gnets:
+    experiment_name = "GBT_" + experiment_name
 else:
     experiment_name = "baseline_" + experiment_name
     
-
 
 # Set the model and gnet checkpoint paths
 fname = experiment_name + "_gnets_" + args.language + ".pth"

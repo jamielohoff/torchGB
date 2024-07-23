@@ -5,6 +5,40 @@ import torch.nn as nn
 import numpy as np
 
 
+def tile_matrix(arr, row_size, col_size):
+    """
+    Return an array of shape (n, row_size, col_size) where
+    n * row_size * col_size = arr.size
+
+    If arr is a 2D array, the returned array should look like n subblocks with
+    each subblock preserving the "physical" layout of arr.
+    """
+    h, w = arr.shape
+    assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
+    assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
+    return (arr.reshape(h // row_size, row_size, -1, col_size)
+               .swapaxes(1,2)
+               .reshape(-1, row_size, col_size))
+    
+
+def assemble_matrix(arr: torch.Tensor, arr_shape: Tuple[int, int]) -> torch.Tensor:
+    """
+    NOTE is the inverse operation to `tile_matrix`
+    Return an array of shape (n, row_size, col_size) where
+    n * row_size * col_size = arr.size
+
+    If arr is a 2D array, the returned array should look like n subblocks with
+    each subblock preserving the "physical" layout of arr.
+    """
+    h, w = arr_shape
+    row_size, col_size = arr.shape[1:]
+    assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
+    assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
+    return (arr.reshape(h // row_size, -1, row_size, col_size)
+                .swapaxes(1, 2)
+                .reshape(h, w))
+
+
 def find_layer(model: nn.Module, pname: str) -> nn.Module:
     """
     Inverse layer lookup function
