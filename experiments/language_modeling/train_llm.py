@@ -392,10 +392,10 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
 
 
 # Compute initial validation loss
-# val_loader = get_dataloader(val_dataset, rank, world_size)
-# val_loss = evaluate(model, val_loader)
-# dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
-# val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
+val_loader = get_dataloader(val_dataset, rank, world_size)
+val_loss = evaluate(model, val_loader)
+dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
+val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
 val_loader = get_dataloader(val_dataset, rank, world_size)
 
 

@@ -114,15 +114,10 @@ class GenomicBottleneck(nn.Module):
                                                                         output_scale,
                                                                         max_gnet_batch)    
                     elif "in_proj_weight" in pname:
-                        print("QKV layer weights")
-                        row_col_encodings, gnets, tile_shape = default_gnet_layer(param_shape, 
-                                                                                    hidden_dim,
-                                                                                    output_scale,
-                                                                                    max_gnet_batch)  
-                        # row_col_encodings, gnets = qkv_gnet_layer(param_shape, 
-                        # hidden_dim, output_scale)
-                        # print(row_col_encodings)
-                        # print(gnets)
+                        row_col_encodings, gnets, tile_shape = qkv_gnet_layer(param_shape, 
+                                                                                hidden_dim,
+                                                                                output_scale,
+                                                                                max_gnet_batch)  
                         gnets = [gnet.to(device_id) for gnet in gnets]
                         optimizers = [Lamb(gnet.parameters(), lr=lr) for gnet in gnets]
                                     
