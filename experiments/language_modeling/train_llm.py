@@ -10,18 +10,15 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.distributed as dist
-from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from torchdata.stateful_dataloader import StatefulDataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from datasets import load_dataset
-from datasets.distributed import split_dataset_by_node
-from transformers import AutoTokenizer
 
 from torchGB import GenomicBottleneck
-from _transformer import GPT, predict_sequence, generate_square_subsequent_mask
+from _transformer import GPT, generate_square_subsequent_mask
 from config import load_config, commit_to_experiments_branch
+from utils import get_dataloader, load_model_layers
 
 parser = argparse.ArgumentParser()
 
@@ -53,32 +50,31 @@ parser.add_argument("--checkpoint_model", action="store_true",
 parser.add_argument("--ignore_layers", type=str, default="",
                     help="Which layers to ignore when compressing with the genomic bottleneck.")
 
-parser.add_argument("--prompt", type=str, default=None,
-                    help="Test prompt for LM.")
-
 parser.add_argument("--transfer_layers", type=str, default="",
                     help="Which layers to transfer from the loaded model.")
 
 parser.add_argument("--no_commit", action="store_false", 
                     help="Whether to create a commit that belongs to the experiment.")
 
-parser.add_argument("--loglevel", type=str, default="INFO", help="Set log level.")
+parser.add_argument("--log_level", type=str, default="INFO", help="Set log level.")
 
 parser.add_argument("--load_dataloader_state", action="store_true",
                     help="Whether to load the dataset state from a checkpoint.")
+
+parser.add_argument("--scheduler", action="store_true",
+                    help="Whether to use a warmup schedule or not.")
 
 args = parser.parse_args()
 
 
 # Setup of logging
 logger.remove()
-logger.add(sys.stderr, level=args.loglevel)
+logger.add(sys.stderr, level=args.log_level)
 
 
 # Setup of global variables
 torch.manual_seed(args.seed)
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
-os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 
 # Multiprocessing setup
@@ -93,6 +89,7 @@ experiment_config = load_config("experiment_config.yml")
 EPOCHS = experiment_config["epochs"]
 BATCHSIZE = args.batchsize
 SEQ_LEN = experiment_config["model"]["seq_len"]
+VOCAB_SIZE = experiment_config["model"]["vocab_size"]
 LOG_INTERVAL = experiment_config["log_interval"]
 VAL_INTERVAL = experiment_config["val_interval"]
 SEED = args.seed
@@ -170,35 +167,7 @@ test_dataset = load_dataset("arrow",
                             streaming=True)
 
 
-# Creating dataloaders
-def get_dataloader(dataset, 
-                    rank: int, 
-                    world_size: int, 
-                    num_workers: int = 8, 
-                    prefetch_factor: int = 4, 
-                    batchsize: int = BATCHSIZE, 
-                    stateful: bool = False) -> DataLoader:
-    node_data = split_dataset_by_node(dataset, rank=rank, world_size=world_size)
-    loader = StatefulDataLoader if stateful else DataLoader
-    return loader(node_data, 
-                pin_memory=True,
-                batch_size=batchsize,
-                num_workers=num_workers,
-                prefetch_factor=prefetch_factor)
-
 train_loader = get_dataloader(train_dataset, rank, world_size, stateful=True)
-
-
-# val_num_words = sum(len(line["text"].split(" ")) for line in oscar_dataset["validation"])
-# test_num_words = sum(len(line["text"].split(" ")) for line in oscar_dataset["test"])
-# print(f"Number of words in val: {val_num_words}\n"
-#       f"Number of words in test: {test_num_words}")
-
-
-# Initialize tokenizer
-tokenizer_dir = os.path.join(base_config["tokenizer_dir"], "oscar_2301_" + args.language)
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
-tokenizer.pad_token = tokenizer.eos_token
 
 
 # Initialize the model and optimizers
@@ -209,46 +178,39 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
 scheduler = None
 
+if args.scheduler:
+    scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
+
 
 # Dealing with custom model loading
 if args.load_model is not None:
+    assert os.path.exists(args.load_model), f"File {args.load_model} does not exist."
+    map_loc = torch.device(rank)
+    cpu_loc = torch.device("cpu")
+    
     # Load dataset state if applicable
     if args.load_dataloader_state:
-        try:
-            SEED = torch.load(args.load_model, map_location=torch.device(rank))["seed"]
-            train_dataset.shuffle(seed=SEED, buffer_size=10000)
-            train_loader = get_dataloader(train_dataset, rank, world_size, stateful=True)
-            train_loader.load_state_dict(torch.load(args.load_model, map_location=torch.device("cpu"))["dataloader"])
-            logger.info(f"Loaded dataloader state from {args.load_model} with random seed {SEED}")
-        except:
-            raise f"No dataset state existing under {args.load_model}"
-    
+        state_dict = torch.load(args.load_model, map_location=cpu_loc)
+        SEED = state_dict["seed"]
+        
+        train_dataset.shuffle(seed=SEED, buffer_size=10_000)
+        train_loader = get_dataloader(train_dataset, rank, world_size, stateful=True)
+        train_loader.load_state_dict(state_dict["dataloader"])
+        
+        logger.info(f"Loaded dataloader state from {args.load_model} "
+                    f"with random seed {SEED}")
+
+    # Load the model weights
+    state_dict = torch.load(args.load_model, map_location=map_loc)
     if args.transfer_layers == "":
-        try:
-            model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["model"])
-            optimizer.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["optimizer"])
-            logger.debug(f"Loaded model weights from {args.load_model}")
-        except:
-            raise f"No model existing under {args.load_model}"
+        model.load_state_dict(state_dict["model"])
+        optimizer.load_state_dict(state_dict["optimizer"])
+        logger.debug(f"Loaded model weights from {args.load_model}")
     else:
-        try:
-            model_dict = torch.load(args.load_model, map_location=torch.device(rank))["model"]
-            optim_dict = torch.load(args.load_model, map_location=torch.device(rank))["optimizer"]
-            new_model_dict = model.state_dict()
-            new_optim_dict = optimizer.state_dict()
-            for key in model_dict.keys():
-                load_layer = any([layer_name in key for layer_name in args.transfer_layers.split(",")])
-                if key in new_model_dict.keys():
-                    new_model_dict[key] = model_dict[key]
-                    new_optim_dict[key] = optim_dict[key]
-            model.load_state_dict(new_model_dict)
-            optimizer.load_state_dict(new_optim_dict)
-            logger.debug(f"Loaded model weights from {args.load_model} for weights {args.transfer_layers}")
-        except:
-            raise f"No model existing under {args.load_model}"
-        scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
-else:
-    scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
+        layer_names = args.transfer_layers.split(",")
+        load_model_layers(state_dict, model, optimizer, layer_names)
+        logger.debug(f"Loaded model weights from {args.load_model} "
+                    f"for weights {args.transfer_layers}")
 
 
 # Which layers to ignore when assigning gnets
@@ -264,14 +226,12 @@ if enable_gnets or init_with_gnets:
 
 # Load G-Net weights if applicable and predict the weights
 if args.load_gnets is not None:
-    try:
-        logger.debug(f"Loading G-Net weights from {args.load_gnets}")
-        gnets.load(args.load_gnets)
-        logger.debug("Predicting weights...")
-        with torch.no_grad():
-            gnets.predict_weights(model)
-    except:
-        raise f"No G-Net existing under {args.load_gnets}"
+    assert os.path.exists(args.load_gnets), f"File {args.load_gnets} does not exist."
+    logger.debug(f"Loading G-Net weights from {args.load_gnets}.")
+    gnets.load(args.load_gnets)
+    logger.debug("Predicting weights...")
+    with torch.no_grad():
+        gnets.predict_weights(model)
 
 
 # Delete the G-Nets after initialization if we only initialize the model with them
@@ -294,7 +254,7 @@ src_mask = generate_square_subsequent_mask(SEQ_LEN).to(rank)
 # Training function
 def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     if enable_gnets: gnets.train()
-    total_loss = 0.
+    total_loss = 0
     start_time = time.time()
     
     for data in train_loader:
@@ -309,7 +269,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             gnets.predict_weights(model)
 
         output = model(data[:, :-1], src_mask)
-        loss = criterion(output.view(-1, tokenizer.vocab_size), data[:, 1:].reshape(-1))
+        loss = criterion(output.view(-1, VOCAB_SIZE), data[:, 1:].reshape(-1))
 
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 0.25)
@@ -323,19 +283,17 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         # Logging
         if global_step % LOG_INTERVAL == 0:
             ms_per_batch = (time.time() - start_time) * 1000 / LOG_INTERVAL
-            cur_loss = torch.tensor([total_loss / LOG_INTERVAL]).to(rank)
+            loss = torch.tensor([total_loss / LOG_INTERVAL]).to(rank)
             dist.barrier()
-            dist.all_reduce(cur_loss, op=dist.ReduceOp.AVG)
-            cur_loss = cur_loss.cpu().item()
-            ppl = np.exp(cur_loss)
-            if args.prompt is not None:
-                predicted_seq = predict_sequence(args.prompt, tokenizer, model, rank, seq_size=32)
-                logger.debug(predicted_seq)
+            dist.all_reduce(loss, op=dist.ReduceOp.AVG)
+            loss = loss.cpu().item()
+            ppl = np.exp(loss)
+
             if rank == 0:
                 logger.debug(f"epoch {epoch:3d} | {global_step:5d} batches | "
                             f"ms/batch {ms_per_batch:5.2f} | "
-                            f"loss {cur_loss:5.2f} | ppl {ppl:8.2f}")
-                writer.add_scalar("loss/train", cur_loss, global_step=global_step)
+                            f"loss {loss:5.2f} | ppl {ppl:8.2f}")
+                writer.add_scalar("loss/train", loss, global_step=global_step)
                 writer.add_scalar("ppl/train", ppl, global_step=global_step)
             dist.barrier()
             
@@ -358,12 +316,12 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 best_val_loss = val_loss
    
                 if args.checkpoint_model and enable_gnets:
-                    logger.debug(f"Saving G-Net weights under {GNET_CHCKPT_PATH}")
+                    logger.debug(f"Saving G-Net weights under {GNET_CHCKPT_PATH}.")
                     gnets.save(GNET_CHCKPT_PATH) 
                 
                 if args.checkpoint_model and rank == 0:
                     logger.debug(f"Saving model weights, optimizer,"
-                                f"seed and dataset state under {MODEL_CHCKPT_PATH}")
+                                f"seed and dataset state under {MODEL_CHCKPT_PATH}.")
                     param_dict = {"seed": SEED,
                                 "model": model.state_dict(),
                                 "optimizer": optimizer.state_dict(),
@@ -374,7 +332,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
 
 
 # Evaluation function
-def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
+def evaluate(model: nn.Module, eval_loader) -> torch.Tensor:
     model.eval() # turn on evaluation mode
     total_loss, norm = 0, 0
     global src_mask
@@ -384,7 +342,7 @@ def evaluate(model: nn.Module, eval_loader: DataLoader) -> torch.Tensor:
             data = torch.stack(data["input_ids"]).t().to(rank)
             seq_len = data.size(1)
             output = model(data[:, :-1], src_mask[:seq_len, :seq_len])
-            output_flat = output.view(-1, tokenizer.vocab_size)
+            output_flat = output.view(-1, VOCAB_SIZE)
             total_loss += criterion(output_flat, data[:, 1:].reshape(-1)).item()
             norm += 1
     logger.info(f"Validation time: {time.time() - start_time}")
@@ -433,15 +391,15 @@ for epoch in range(EPOCHS):
     dist.barrier()
     train(model, gnets)
     SEED += 1
-    train_dataset = train_dataset.shuffle(seed=SEED, buffer_size=10000)
-    val_dataset = val_dataset.shuffle(seed=SEED, buffer_size=10000)
+    train_dataset = train_dataset.shuffle(seed=SEED, buffer_size=10_000)
+    val_dataset = val_dataset.shuffle(seed=SEED, buffer_size=10_000)
     train_loader = get_dataloader(train_dataset, rank, world_size, stateful=True)
     val_loader = get_dataloader(val_dataset, rank, world_size)
     writer.flush()
 
 
 # Evaluate the best model on the test dataset
-test_dataset = test_dataset.shuffle(seed=args.seed, buffer_size=10000)
+test_dataset = test_dataset.shuffle(seed=SEED, buffer_size=10_000)
 test_loader = get_dataloader(test_dataset, rank, world_size)
 model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["model"])
 

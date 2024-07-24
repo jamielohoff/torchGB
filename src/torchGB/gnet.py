@@ -45,15 +45,12 @@ class GenomicBottleNet(nn.Module):
         # self.apply(self.init_weights)
 
     def forward(self, x: Tensor) -> Tensor:
-        # TODO Rescaling inputs such that they are in range [0, inf] with std 1
-        
         for layer in self.layers:
             x = F.silu(layer(x))
         output_scale = self.output_scale if self.output_scale > 1e-8 else torch.tensor(1.).to(self.output_scale.device)
         return output_scale * x
     
-    def init_weights(self, module: nn.Module) -> None:     
-        # TODO weights should only be initialized with inputs in mind       
+    def init_weights(self, module: nn.Module) -> None:         
         if isinstance(module, nn.Linear):
             nn.init.normal_(module.weight, mean=0, std=np.sqrt(2./module.weight.shape[0]))
             nn.init.zeros_(module.bias)
