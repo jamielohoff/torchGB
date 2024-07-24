@@ -15,7 +15,7 @@ def tile_matrix(arr, row_size, col_size):
     each subblock preserving the "physical" layout of arr.
     """
     h, w, c = arr.shape
-    print("h, w", h, w)
+    print("h, w", h, w, c, h // row_size)
     assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
     assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
     return (arr.reshape(h // row_size, row_size, -1, col_size, c)
