@@ -280,6 +280,7 @@ class GenomicBottleneck(nn.Module):
                     for gnet_input, gnet in zip(self.gnetdict[name].gnets_inputs, self.gnetdict[name].gnets):
                         print(gnet_input.shape)
                         new_weight_tile = gnet(gnet_input)
+                        print("gnet output", new_weight_tile.shape)
                         new_weights_tile = new_weights_tile.view(tile_shape)
                         new_weights.append(new_weight_tile)
                     new_weights = torch.stack(new_weights)
