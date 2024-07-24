@@ -96,11 +96,13 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale):
                                             encoding_bits)
     row_col_encoding = row_col_encoding.reshape(row_size, col_size, -1)
     num_inputs = row_col_encoding.shape[1]
-    print(row_tile_size, col_tile_size)
+
     subdivided_row_col_encodings = tile_matrix(row_col_encoding, 
                                                 row_tile_size, 
                                                 col_tile_size)
-    print("sub", subdivided_row_col_encodings.shape)
+
+    _shape = subdivided_row_col_encodings.shape
+    subdivided_row_col_encodings = subdivided_row_col_encodings.reshape(_shape[0], -1, _shape[-1])
     gnet_sizes = (num_inputs, hidden_dim, hidden_dim//2, 1)
     gnets = [GenomicBottleNet(gnet_sizes, output_scale=output_scale) 
             for _ in range(num_row_tiles*num_col_tiles)]
