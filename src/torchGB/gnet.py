@@ -83,8 +83,8 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale):
     num_row_tiles = int(np.sqrt(n * row_size / col_size))
     num_col_tiles = int(np.sqrt(n * col_size / row_size))
     
-    row_tile_size = np.min([row_size, np.ceil(row_size/num_row_tiles)])
-    col_tile_size = np.min([col_size, np.ceil(col_size/num_col_tiles)])
+    row_tile_size = int(np.min([row_size, np.ceil(row_size/num_row_tiles)]))
+    col_tile_size = int(np.min([col_size, np.ceil(col_size/num_col_tiles)]))
     
     # Treat 2D weight as fully connected
     encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype("uint16")
