@@ -18,13 +18,13 @@ def tile_matrix(arr, row_size, col_size):
     assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
     assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
     return (arr.reshape(h // row_size, row_size, -1, col_size, c)
-               .swapaxes(1,2)
+               .swapaxes(1, 2)
                .reshape(-1, row_size, col_size, c))
     
 
 def assemble_matrix(arr: torch.Tensor, arr_shape: Tuple[int, int]) -> torch.Tensor:
     """
-    NOTE is the inverse operation to `tile_matrix`
+    NOTE is NOT the inverse operation to `tile_matrix`
     Return an array of shape (n, row_size, col_size) where
     n * row_size * col_size = arr.size
 

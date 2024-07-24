@@ -59,7 +59,7 @@ class GenomicBottleNet(nn.Module):
             nn.init.zeros_(module.bias)
 
 
-def conv2d_gnet_layer(param_shape, hidden_dim, output_scale):
+def conv2d_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
     encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype("uint16")
     encoding_bits[:2] = param_shape[:2]
     encoding_bits[np.where(encoding_bits == 0)] = 1
@@ -72,10 +72,8 @@ def conv2d_gnet_layer(param_shape, hidden_dim, output_scale):
     gnet = GenomicBottleNet(gnet_sizes, output_scale=output_scale)   
     return row_col_encoding, gnet
     
-    
-max_gnet_batch = 36_864
 
-def default_gnet_layer(param_shape, hidden_dim, output_scale):
+def default_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
     row_size, col_size = param_shape
     
     numel = np.prod(param_shape)
@@ -109,7 +107,7 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale):
     return subdivided_row_col_encodings, gnets, (row_tile_size, col_tile_size)
 
 
-def qkv_gnet_layer(param_shape, hidden_dim, output_scale):
+def qkv_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
     # Subdivide the attention weight matrix in three similar parts Wq, Wk, Wv
     param_shape = (param_shape[0]//3, param_shape[1])
     encodings_layers = [default_gnet_layer(param_shape, hidden_dim, output_scale) for _ in range(3)]
