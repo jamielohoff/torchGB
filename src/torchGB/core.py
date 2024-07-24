@@ -278,6 +278,7 @@ class GenomicBottleneck(nn.Module):
                     new_weights = []
                     tile_shape = self.gnetdict[name].tile_shape
                     for gnet_input, gnet in zip(self.gnetdict[name].gnets_inputs, self.gnetdict[name].gnets):
+                        print(gnet_input.shape)
                         new_weight_tile = gnet(gnet_input)
                         new_weights_tile = new_weights_tile.view(tile_shape)
                         new_weights.append(new_weight_tile)
