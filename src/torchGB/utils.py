@@ -6,7 +6,7 @@ import torch.nn as nn
 import numpy as np
 
 
-def tile_matrix(arr, row_size, col_size):
+def tile_matrix(arr, row_size: int, col_size: int):
     """
     Return an array of shape (n, row_size, col_size) where
     n * row_size * col_size = arr.size
@@ -38,6 +38,20 @@ def assemble_matrix(arr: torch.Tensor, arr_shape: Tuple[int, int]) -> torch.Tens
     return (arr.reshape(h // row_size, -1, row_size, col_size)
                 .swapaxes(1, 2)
                 .reshape(h, w))
+    
+    
+def get_tile_size(param_shape: Tuple[int, int], max_gnet_batch: int) -> Tuple[int, int]:
+    row_size, col_size = param_shape
+    
+    numel = np.prod(param_shape)
+    n = numel / max_gnet_batch
+    num_row_tiles = np.max([np.sqrt(n * row_size / col_size), 1]).astype(np.int32)
+    num_col_tiles = np.max([np.sqrt(n * col_size / row_size), 1]).astype(np.int32)
+    
+    row_tile_size = np.min([row_size, np.ceil(row_size / num_row_tiles)]).astype(np.int32)
+    col_tile_size = np.min([col_size, np.ceil(col_size / num_col_tiles)]).astype(np.int32)
+
+    return num_row_tiles, num_col_tiles, row_tile_size, col_tile_size
 
 
 def find_layer(model: nn.Module, pname: str) -> nn.Module:
