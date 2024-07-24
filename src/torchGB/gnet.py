@@ -95,7 +95,7 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale):
                                             param_shape, 
                                             encoding_bits)
     row_col_encoding = row_col_encoding.reshape(row_size, col_size, -1)
-    num_inputs = row_col_encoding.shape[1]
+    num_inputs = row_col_encoding.shape[-1]
 
     subdivided_row_col_encodings = tile_matrix(row_col_encoding, 
                                                 row_tile_size, 
