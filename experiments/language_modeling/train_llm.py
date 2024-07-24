@@ -283,7 +283,7 @@ if init_with_gnets:
 
 # Calculate model num_params and compression factor if applicable
 num_params = sum(p.numel() for p in model.parameters())
-compression_factor = gnets.compression(model) if enable_gnets else 1.0
+compression_factor = 1. # gnets.compression(model) if enable_gnets else 1.0
 
 
 # Other stuff that is required
@@ -343,34 +343,34 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             start_time = time.time()
 
         # Validation
-        if global_step % VAL_INTERVAL == 0:
-            val_loss = evaluate(model, val_loader)
-            dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
-            val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
+        # if global_step % VAL_INTERVAL == 0:
+        #     val_loss = evaluate(model, val_loader)
+        #     dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
+        #     val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
             
-            if rank == 0:
-                logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
-                writer.add_scalar("loss/val", val_loss, global_step=global_step)
-                writer.add_scalar("ppl/val", val_ppl, global_step=global_step)
+        #     if rank == 0:
+        #         logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
+        #         writer.add_scalar("loss/val", val_loss, global_step=global_step)
+        #         writer.add_scalar("ppl/val", val_ppl, global_step=global_step)
                 
-            global best_val_loss
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+        #     global best_val_loss
+        #     if val_loss < best_val_loss:
+        #         best_val_loss = val_loss
    
-                if args.checkpoint_model and enable_gnets:
-                    logger.debug(f"Saving G-Net weights under {GNET_CHCKPT_PATH}")
-                    gnets.save(GNET_CHCKPT_PATH) 
+        #         if args.checkpoint_model and enable_gnets:
+        #             logger.debug(f"Saving G-Net weights under {GNET_CHCKPT_PATH}")
+        #             gnets.save(GNET_CHCKPT_PATH) 
                 
-                if args.checkpoint_model and rank == 0:
-                    logger.debug(f"Saving model weights, optimizer,"
-                                f"seed and dataset state under {MODEL_CHCKPT_PATH}")
-                    param_dict = {"seed": SEED,
-                                "model": model.state_dict(),
-                                "optimizer": optimizer.state_dict(),
-                                "dataloader": train_loader.state_dict()}
-                    torch.save(param_dict, MODEL_CHCKPT_PATH)
-                else:
-                    time.sleep(1)
+        #         if args.checkpoint_model and rank == 0:
+        #             logger.debug(f"Saving model weights, optimizer,"
+        #                         f"seed and dataset state under {MODEL_CHCKPT_PATH}")
+        #             param_dict = {"seed": SEED,
+        #                         "model": model.state_dict(),
+        #                         "optimizer": optimizer.state_dict(),
+        #                         "dataloader": train_loader.state_dict()}
+        #             torch.save(param_dict, MODEL_CHCKPT_PATH)
+        #         else:
+        #             time.sleep(1)
 
 
 # Evaluation function
