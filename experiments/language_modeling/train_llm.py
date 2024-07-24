@@ -44,7 +44,7 @@ parser.add_argument("--disable_gnets", action="store_false",
 parser.add_argument("--init_with_gnets", action="store_false",
                     help="Initialize the model with the weights predicted by the gnets.")
 
-parser.add_argument("--checkpoint_model", action="store_true",
+parser.add_argument("--checkpoint", action="store_true",
                     help="Whether to store the model weights and optimizer.")
 
 parser.add_argument("--ignore_layers", type=str, default="",
@@ -139,7 +139,7 @@ MODEL_CHCKPT_PATH  = os.path.join(base_config["save_model_dir"], fname)
 
 
 # Check if the files already exist
-if rank == 0 and args.checkpoint_model:
+if rank == 0 and args.checkpoint:
     if os.path.isfile(GNET_CHCKPT_PATH):
         logger.warning(f"File {GNET_CHCKPT_PATH} already exists.")
     if os.path.isfile(MODEL_CHCKPT_PATH):
@@ -315,20 +315,21 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
    
-                if args.checkpoint_model and enable_gnets:
-                    logger.debug(f"Saving G-Net weights under {GNET_CHCKPT_PATH}.")
-                    gnets.save(GNET_CHCKPT_PATH) 
+                if args.checkpoint:
+                    if enable_gnets:
+                        logger.debug(f"Saving G-Net weights under {GNET_CHCKPT_PATH}.")
+                        gnets.save(GNET_CHCKPT_PATH) 
                 
-                if args.checkpoint_model and rank == 0:
-                    logger.debug(f"Saving model weights, optimizer,"
-                                f"seed and dataset state under {MODEL_CHCKPT_PATH}.")
-                    param_dict = {"seed": SEED,
-                                "model": model.state_dict(),
-                                "optimizer": optimizer.state_dict(),
-                                "dataloader": train_loader.state_dict()}
-                    torch.save(param_dict, MODEL_CHCKPT_PATH)
-                else:
-                    time.sleep(1)
+                    if rank == 0:
+                        logger.debug(f"Saving model weights, optimizer,"
+                                    f"seed and dataset state under {MODEL_CHCKPT_PATH}.")
+                        param_dict = {"seed": SEED,
+                                    "model": model.state_dict(),
+                                    "optimizer": optimizer.state_dict(),
+                                    "dataloader": train_loader.state_dict()}
+                        torch.save(param_dict, MODEL_CHCKPT_PATH)
+                    else:
+                        time.sleep(1)
 
 
 # Evaluation function

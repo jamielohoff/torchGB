@@ -68,7 +68,7 @@ class GenomicBottleneck(nn.Module):
                 model: nn.Module, 
                 hidden_dim: int = 64, 
                 lr: float = 2.5-4,
-                max_gnet_batch: int = 36_864,
+                max_gnet_batchsize: int = 36_864,
                 ignore_layers: Optional[Sequence[str]] = []) -> None:
         super(GenomicBottleneck, self).__init__()             
         
@@ -112,13 +112,14 @@ class GenomicBottleneck(nn.Module):
                             row_col_encoding, gnet = conv2d_gnet_layer(param_shape, 
                                                                         hidden_dim,
                                                                         output_scale,
-                                                                        max_gnet_batch)    
+                                                                        max_gnet_batchsize)    
                     elif "in_proj_weight" in pname:
                         row_col_encodings, gnets, tile_shape = qkv_gnet_layer(param_shape, 
                                                                                 hidden_dim,
                                                                                 output_scale,
-                                                                                max_gnet_batch)  
+                                                                                max_gnet_batchsize)  
                         gnets = [gnet.to(device_id) for gnet in gnets]
+                        print("Number of g-nets:", len(gnets))
                         optimizers = [Lamb(gnet.parameters(), lr=lr) for gnet in gnets]
                                     
                     else:                        
@@ -127,8 +128,9 @@ class GenomicBottleneck(nn.Module):
                             row_col_encodings, gnets, tile_shape = default_gnet_layer(param_shape, 
                                                                                         hidden_dim,
                                                                                         output_scale,
-                                                                                        max_gnet_batch)
+                                                                                        max_gnet_batchsize)
                             gnets = [gnet.to(device_id) for gnet in gnets]
+                            print("Number of g-nets:", len(gnets))
                             optimizers = [Lamb(gnet.parameters(), lr=lr) for gnet in gnets]
                     # TODO reintegrate this
                     # Add layer to the dict                                                          
@@ -277,10 +279,13 @@ class GenomicBottleneck(nn.Module):
                     for gnet_input, gnet in zip(self.gnetdict[name].gnets_inputs, self.gnetdict[name].gnets):
                         new_weight_tile = gnet(gnet_input)
                         new_weight_tile = new_weight_tile.reshape(tile_shape)
-                        new_weights.append(new_weight_tile)
-                    new_weights = torch.stack(new_weights)
+                        new_weights.append(new_weight_tile.t())
+                        
+                    # Assemble the new weight tiles into the full weight matrix
+                    new_weights = torch.stack(new_weights, dim=0)
                     new_weights = assemble_matrix(new_weights, param.data.shape)
                     self.gnetdict[name].weights = new_weights
+                    
                     # Sets the models parameters to the corresponding new weights
                     param.data = nn.Parameter(new_weights)
                 param_list[self.gnetdict[name].rank].append(param.data)

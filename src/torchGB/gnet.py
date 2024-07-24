@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .utils import make_row_col_encoding, tile_matrix
+from .utils import make_row_col_encoding, tile_matrix, get_tile_size
 
 
 NIL = 0 # No encoding
@@ -71,15 +71,7 @@ def conv2d_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
 
 
 def default_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
-    row_size, col_size = param_shape
-    
-    numel = np.prod(param_shape)
-    n = numel / max_gnet_batch
-    num_row_tiles = np.sqrt(n * row_size / col_size).astype(np.int32)
-    num_col_tiles = np.sqrt(n * col_size / row_size).astype(np.int32)
-    
-    row_tile_size = np.min([row_size, np.ceil(row_size/num_row_tiles)]).astype(np.int32)
-    col_tile_size = np.min([col_size, np.ceil(col_size/num_col_tiles)]).astype(np.int32)
+    num_row_tiles, num_col_tiles, row_tile_size, col_tile_size = get_tile_size(param_shape, max_gnet_batch)
     
     # Treat 2D weight as fully connected
     encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype(np.uint16)
@@ -89,7 +81,7 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
     row_col_encoding = make_row_col_encoding(encoding_type, 
                                             param_shape, 
                                             encoding_bits)
-    row_col_encoding = row_col_encoding.reshape(row_size, col_size, -1)
+    row_col_encoding = row_col_encoding.reshape(*param_shape, -1)
     num_inputs = row_col_encoding.shape[-1]
 
     tiled_row_col_encodings = tile_matrix(row_col_encoding, 
@@ -106,17 +98,9 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
 
 def qkv_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
     # Subdivide the attention weight matrix in three similar parts Wq, Wk, Wv
-    _param_shape = (param_shape[0]//3, param_shape[1])
+    _param_shape = (param_shape[0] // 3, param_shape[1])
     
-    row_size, col_size = _param_shape
-    
-    numel = np.prod(_param_shape)
-    n = numel / max_gnet_batch
-    num_row_tiles = np.sqrt(n * row_size / col_size).astype(np.int32)
-    num_col_tiles = np.sqrt(n * col_size / row_size).astype(np.int32)
-    
-    row_tile_size = np.min([row_size, np.ceil(row_size/num_row_tiles)]).astype(np.int32)
-    col_tile_size = np.min([col_size, np.ceil(col_size/num_col_tiles)]).astype(np.int32)
+    num_row_tiles, num_col_tiles, row_tile_size, col_tile_size = get_tile_size(_param_shape, max_gnet_batch)
     
     # Treat 2D weight as fully connected
     encoding_bits = np.ceil(np.log(_param_shape)/np.log(2)).astype(np.uint16)
@@ -127,7 +111,7 @@ def qkv_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
                                             _param_shape, 
                                             encoding_bits)
     
-    row_col_encoding = row_col_encoding.reshape(row_size, col_size, -1)
+    row_col_encoding = row_col_encoding.reshape(*_param_shape, -1)
     num_inputs = row_col_encoding.shape[-1]
     
     
