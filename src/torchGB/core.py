@@ -253,12 +253,14 @@ class GenomicBottleneck(nn.Module):
     def train(self) -> None:
         for name in self.gnetdict.keys():
             if self.gnetdict[name].rank == dist.get_rank():
-                self.gnetdict[name].gnet.train()
+                for gnet in self.gnetdict[name].gnets:
+                    gnet.train()
     
     def zero_grad(self) -> None:
         for name in self.gnetdict.keys():
             if self.gnetdict[name].rank == dist.get_rank():
-                self.gnetdict[name].optimizer.zero_grad()
+                for gnet in self.gnetdict[name].gnets:
+                    gnet.zero_grad()
         
     def predict_weights(self, model: nn.Module) -> None:
         """
