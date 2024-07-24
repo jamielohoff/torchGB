@@ -403,7 +403,7 @@ val_loader = get_dataloader(val_dataset, rank, world_size)
 if rank == 0:
     logger.info(f"Number of model parameters: {num_params}")   
     logger.info(f"G-Net compression: {compression_factor}") 
-    # logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
+    logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
     
     run_config = {"commit_hash": commit_hash,
                     "batchsize": BATCHSIZE,
@@ -424,8 +424,8 @@ if rank == 0:
                             filename_suffix=run_name,
                             flush_secs=60)
     writer.add_text("global/config", str(run_config))
-    # writer.add_scalar("loss/val", val_loss, global_step=global_step)
-    # writer.add_scalar("ppl/val", val_ppl, global_step=global_step)
+    writer.add_scalar("loss/val", val_loss, global_step=global_step)
+    writer.add_scalar("ppl/val", val_ppl, global_step=global_step)
 
 
 # Actual training loop
