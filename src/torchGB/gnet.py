@@ -80,8 +80,8 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale):
     
     numel = np.prod(param_shape)
     n = numel / max_gnet_batch
-    num_row_tiles = np.sqrt(n * row_size / col_size)
-    num_col_tiles = np.sqrt(n * col_size / row_size)
+    num_row_tiles = int(np.sqrt(n * row_size / col_size))
+    num_col_tiles = int(np.sqrt(n * col_size / row_size))
     
     row_tile_size = np.min([row_size, np.ceil(row_size/num_row_tiles)])
     col_tile_size = np.min([col_size, np.ceil(col_size/num_col_tiles)])
