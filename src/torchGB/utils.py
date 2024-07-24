@@ -14,13 +14,13 @@ def tile_matrix(arr, row_size, col_size):
     If arr is a 2D array, the returned array should look like n subblocks with
     each subblock preserving the "physical" layout of arr.
     """
-    h, w = arr.shape
+    h, w, c = arr.shape
     print("h, w", h, w)
     assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
     assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
-    return (arr.reshape(h // row_size, row_size, -1, col_size)
+    return (arr.reshape(h // row_size, row_size, -1, col_size, c)
                .swapaxes(1,2)
-               .reshape(-1, row_size, col_size))
+               .reshape(-1, row_size, col_size, c))
     
 
 def assemble_matrix(arr: torch.Tensor, arr_shape: Tuple[int, int]) -> torch.Tensor:
