@@ -147,7 +147,7 @@ class GenomicBottleneck(nn.Module):
                                                     rank=device_id,
                                                     tile_shape=tile_shape,
                                                     gnets=gnets,
-                                                    optimizer=optimizers,
+                                                    optimizers=optimizers,
                                                     gnets_inputs=row_col_encodings.to(device_id),
                                                     weights=param.data,
                                                     grad_scale=grad_scale.to(device_id))
