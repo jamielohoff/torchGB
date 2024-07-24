@@ -73,9 +73,7 @@ def conv2d_gnet_layer(param_shape, hidden_dim, output_scale):
     return row_col_encoding, gnet
     
     
-max_gnet_batch = 40_000
-
-
+max_gnet_batch = 36_864
 
 def default_gnet_layer(param_shape, hidden_dim, output_scale):
     row_size, col_size = param_shape
@@ -97,6 +95,7 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale):
                                             param_shape, 
                                             encoding_bits)
     num_inputs = row_col_encoding.shape[1]
+    print(row_tile_size, col_tile_size)
     subdivided_row_col_encodings = tile_matrix(row_col_encoding, 
                                                 row_tile_size, 
                                                 col_tile_size)
