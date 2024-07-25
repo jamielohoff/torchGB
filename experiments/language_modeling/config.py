@@ -1,3 +1,5 @@
+import os
+import time
 import yaml
 import git
 
@@ -13,6 +15,11 @@ def load_config(file: str) -> dict:
 
 
 def commit_to_experiments_branch(project_root: str):
+    # Wait for your turn to access the repository
+    while os.path.exists(os.join(project_root, ".git", "index.lock")):
+        print("Waiting for the index.lock file to be released.")
+        time.sleep(5)
+    
     # Open the repository
     repo = git.Repo(project_root)    
     
