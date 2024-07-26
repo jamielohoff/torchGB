@@ -1,4 +1,4 @@
-from typing import Sequence
+from typing import Sequence, Tuple
 import numpy as np
 
 import torch
@@ -35,7 +35,6 @@ class GenomicBottleNet(nn.Module):
         length = len(sizes) - 1
         self.layers = nn.ModuleList([nn.Linear(sizes[i], sizes[i+1]) 
                                     for i in range(length)])
-        # self.apply(self.init_weights)
 
     def forward(self, x: Tensor) -> Tensor:
         for layer in self.layers[:-1]:
@@ -50,7 +49,10 @@ class GenomicBottleNet(nn.Module):
             nn.init.zeros_(module.bias)
 
 
-def conv2d_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
+def conv2d_gnet_layer(param_shape: Tuple[int, int], 
+                    hidden_dim: int, 
+                    output_scale: float, 
+                    max_gnet_batch: int) -> Tuple[Tensor, GenomicBottleNet, Tuple[int, int]]:
     num_encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype(np.uint16)
     num_encoding_bits[:2] = param_shape[:2]
     num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
@@ -69,7 +71,10 @@ def conv2d_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
     return row_col_encoding, gnet
 
 
-def default_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
+def default_gnet_layer(param_shape: Tuple[int, int], 
+                        hidden_dim: int, 
+                        output_scale: float, 
+                        max_gnet_batch: int) -> Tuple[Tensor, GenomicBottleNet, Tuple[int, int]]:
     num_row_tiles, num_col_tiles, row_tile_size, col_tile_size = get_tile_size(param_shape, max_gnet_batch)
     
     num_encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype(np.uint16)
@@ -82,16 +87,17 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
                                             encoding_type, 
                                             num_encoding_bits)
     num_inputs = row_col_encoding.shape[-1]
-    tiled_row_col_encodings = [row_col_encoding]*num_row_tiles*num_col_tiles
-    tiled_row_col_encodings = torch.stack(tiled_row_col_encodings, dim=0)
-    
+
     gnet_sizes = (num_inputs, hidden_dim, 1)
     gnets = [GenomicBottleNet(gnet_sizes, output_scale) 
             for _ in range(num_row_tiles*num_col_tiles)]
-    return tiled_row_col_encodings, gnets, (row_tile_size, col_tile_size)
+    return row_col_encoding, gnets, (row_tile_size, col_tile_size)
 
 
-def qkv_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
+def qkv_gnet_layer(param_shape: Tuple[int, int], 
+                    hidden_dim: int, 
+                    output_scale: float, 
+                    max_gnet_batch: int) -> Tuple[Tensor, GenomicBottleNet, Tuple[int, int]]:
     # Subdivide the attention weight matrix in three similar parts Wq, Wk, Wv
     _param_shape = (param_shape[0] // 3, param_shape[1])
     num_row_tiles, num_col_tiles, row_tile_size, col_tile_size = get_tile_size(_param_shape, max_gnet_batch)
@@ -107,13 +113,11 @@ def qkv_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
                                             encoding_type, 
                                             num_encoding_bits)
     num_inputs = row_col_encoding.shape[-1]
-    tiled_row_col_encodings = [row_col_encoding]*3*num_row_tiles*num_col_tiles
-    tiled_row_col_encodings = torch.stack(tiled_row_col_encodings, dim=0)
  
     gnet_sizes = (num_inputs, hidden_dim, 1)
     gnets = [GenomicBottleNet(gnet_sizes, output_scale) 
             for _ in range(3*num_row_tiles*num_col_tiles)]
     
-    return tiled_row_col_encodings, gnets, (row_tile_size, col_tile_size)
+    return row_col_encoding, gnets, (row_tile_size, col_tile_size)
     
     

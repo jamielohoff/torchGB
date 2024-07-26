@@ -160,5 +160,6 @@ def make_row_col_encoding(param_shape: Sequence[int],
     with torch.no_grad():
         row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / \
                             torch.std(row_col_encoding)
+        row_col_encoding -= row_col_encoding.min()
     return row_col_encoding   
 
