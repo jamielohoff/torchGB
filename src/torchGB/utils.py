@@ -20,30 +20,26 @@ def tile_matrix(arr: torch.Tensor, row_size: int, col_size: int):
     each subblock preserving the "physical" layout of arr.
     
     Args:
-        `arr` (torch.Tensor): The input array to be tiled. Has to be three-dimensional.
+        `arr` (torch.Tensor): The input array to be tiled. Has to be two-dimensional.
         `row_size` (int): The number of rows in each subtile.
         `col_size` (int): The number of columns in each subtile.
         
     Returns:
         torch.Tensor: The tiled array.
     """
-    h, w, c = arr.shape
-    assert len(arr.shape) == 3, "Input array must be 3D"
+    h, w = arr.shape
+    assert len(arr.shape) == 2, "Input array must be 3D"
     assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
     assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
-    return (arr.reshape(h // row_size, row_size, -1, col_size, c)
+    return (arr.reshape(h // row_size, row_size, -1, col_size)
                .swapaxes(1, 2)
-               .reshape(-1, row_size, col_size, c))
+               .reshape(-1, row_size, col_size))
     
 
 def assemble_matrix(arr: torch.Tensor, arr_shape: Tuple[int, int]) -> torch.Tensor:
     """
-    NOTE This is NOT the inverse operation to `tile_matrix`.
-    Return an array of shape (n, row_size, col_size) where
-    n * row_size * col_size = arr.size
-
-    If arr is a 2D array, the returned array should look like n subblocks with
-    each subblock preserving the "physical" layout of arr.
+    NOTE This is the inverse of tile_matrix. This function reassembles the 
+    original array from its tiled form. The input array must be 3D.
     
     Args:
         `arr` (torch.Tensor): The input array in its tiled form.
@@ -117,7 +113,7 @@ def make_row_col_encoding(param_shape: Sequence[int],
 
 
     # This will compute the encoding for axis i
-    def get_encoding_for_dim(i):
+    def get_encoding_for_dim(i: int) -> np.ndarray:
         # Compute the encoding for the i-th axis
         shape = np.ones(param_shape.size, dtype=np.int32)
         shape[i] = param_shape[i]
