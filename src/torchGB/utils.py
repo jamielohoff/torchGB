@@ -111,11 +111,10 @@ def make_row_col_encoding(param_shape: Sequence[int],
     row_col_encoding = np.zeros((param_shape.prod(), num_encoding_bits.sum()))
     num_encoding_types = len(encoding_types)
 
-
     # This will compute the encoding for axis i
     def get_encoding_for_dim(i: int) -> np.ndarray:
         # Compute the encoding for the i-th axis
-        shape = np.ones(param_shape.size, dtype=np.int32)
+        shape = np.ones(param_shape.size, dtype=np.int16)
         shape[i] = param_shape[i]
         dim_encoding = np.arange(param_shape[i]).reshape(shape)
         
@@ -125,25 +124,25 @@ def make_row_col_encoding(param_shape: Sequence[int],
         dim_encoding = np.tile(dim_encoding, tiling)   
 
         # Flatten the encoding
-        dim_encoding = np.reshape(dim_encoding, (np.prod(param_shape), 1), order="F")
+        dim_encoding = np.reshape(dim_encoding, (np.prod(param_shape), 1))
 
-        if encoding_types[i] == EncodingType.ONEHOT:
+        if encoding_types[i].value == 0:
             max_hot = dim_encoding.max() + 1
-            one_hot_encoding = np.zeros((param_shape[i], max_hot), dtype=np.int32)
+            one_hot_encoding = np.zeros((param_shape[i], max_hot), dtype=np.int16)
             one_hot_encoding[np.arange(param_shape[i]), dim_encoding.squeeze()] = 1
             
-        elif encoding_types[i] == EncodingType.BINARY: # Binary code
+        elif encoding_types[i].value == 1: # Binary code
             max_bits = num_encoding_bits[i]
             num_digits = 2 ** max_bits
-            bins = np.zeros((num_digits, max_bits), dtype=np.int8)
+            bins = np.zeros((num_digits, max_bits), dtype=np.int16)
             
             # This will be used for binary conversion
             for j in range(num_digits):
-                bins[j, :] = np.array(list(np.binary_repr(j).zfill(max_bits))).astype(np.int8)
+                bins[j, :] = np.array(list(np.binary_repr(j).zfill(max_bits))).astype(np.int16)
                 
             # Convert to binary numbers 
-            dim_encoding = bins[dim_encoding.squeeze(), :] 
             # Take only the lowest bits
+            dim_encoding = bins[dim_encoding.squeeze(), :] 
             dim_encoding = dim_encoding[:, (max_bits - num_encoding_bits[i]):(max_bits)] 
         else:
             raise ValueError("Invalid encoding type!")
