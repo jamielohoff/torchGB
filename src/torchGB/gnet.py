@@ -81,10 +81,10 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
     row_col_encoding = make_row_col_encoding(tile_shape,
                                             encoding_type, 
                                             num_encoding_bits)
-    print("row col encoding shape", row_col_encoding.shape)
     num_inputs = row_col_encoding.shape[-1]
     tiled_row_col_encodings = [row_col_encoding]*num_row_tiles*num_col_tiles
     tiled_row_col_encodings = torch.stack(tiled_row_col_encodings, dim=0)
+    
     gnet_sizes = (num_inputs, hidden_dim, 1)
     gnets = [GenomicBottleNet(gnet_sizes, output_scale) 
             for _ in range(num_row_tiles*num_col_tiles)]
@@ -109,7 +109,7 @@ def qkv_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
     num_inputs = row_col_encoding.shape[-1]
     tiled_row_col_encodings = [row_col_encoding]*3*num_row_tiles*num_col_tiles
     tiled_row_col_encodings = torch.stack(tiled_row_col_encodings, dim=0)
-    print("tiled", tiled_row_col_encodings.shape, num_row_tiles, num_col_tiles)
+ 
     gnet_sizes = (num_inputs, hidden_dim, 1)
     gnets = [GenomicBottleNet(gnet_sizes, output_scale) 
             for _ in range(3*num_row_tiles*num_col_tiles)]

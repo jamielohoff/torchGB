@@ -284,7 +284,6 @@ class GenomicBottleneck(nn.Module):
                 if self.gnetdict[name].rank == dist.get_rank():
                     new_weights = []
                     tile_shape = self.gnetdict[name].tile_shape
-                    print("gnets inputs:", self.gnetdict[name].gnets_inputs.shape)
                     for gnet_input, gnet in zip(self.gnetdict[name].gnets_inputs, self.gnetdict[name].gnets):
                         new_weight_tile = gnet(gnet_input)
                         new_weight_tile = new_weight_tile.reshape(tile_shape)
@@ -292,7 +291,6 @@ class GenomicBottleneck(nn.Module):
                         
                     # Assemble the new weight tiles into the full weight matrix
                     new_weights = torch.stack(new_weights, dim=0)
-                    print("New weights shape:", new_weights.shape, param.data.shape)
                     new_weights = assemble_matrix(new_weights, param.data.shape)
                     self.gnetdict[name].weights = new_weights
                     
