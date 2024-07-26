@@ -6,15 +6,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .utils import make_row_col_encoding, tile_matrix, get_tile_size
+from .utils import (make_row_col_encoding, 
+                    tile_matrix, 
+                    get_tile_size, 
+                    EncodingType)
 
-
-NIL = 0 # No encoding
-HOT = 1 # One-hot vector
-BIN = 2 # Binary code
-GRY = 3 # Gray code
-LIN = 4 # Linear? code
-RND = 5 # Random code
 
 
 class GenomicBottleNet(nn.Module):
@@ -58,15 +54,20 @@ class GenomicBottleNet(nn.Module):
 
 
 def conv2d_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
-    encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype(np.uint16)
-    encoding_bits[:2] = param_shape[:2]
-    encoding_bits[np.where(encoding_bits == 0)] = 1
-    encoding_type = (HOT, HOT, BIN, BIN)         
+    num_encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype(np.uint16)
+    num_encoding_bits[:2] = param_shape[:2]
+    num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
+    encoding_type = (EncodingType.ONEHOT, 
+                    EncodingType.ONEHOT, 
+                    EncodingType.BINARY, 
+                    EncodingType.BINARY)         
                   
-    row_col_encoding = make_row_col_encoding(encoding_type, param_shape, encoding_bits)
+    row_col_encoding = make_row_col_encoding(param_shape,
+                                            encoding_type,
+                                            num_encoding_bits)
     num_inputs = row_col_encoding.shape[1]
     
-    gnet_sizes = (num_inputs, hidden_dim, hidden_dim, hidden_dim//2, 1) 
+    gnet_sizes = (num_inputs, hidden_dim, hidden_dim//2, 1) 
     gnet = GenomicBottleNet(gnet_sizes, output_scale=output_scale)   
     return row_col_encoding, gnet
 
@@ -75,23 +76,24 @@ def default_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
     num_row_tiles, num_col_tiles, row_tile_size, col_tile_size = get_tile_size(param_shape, max_gnet_batch)
     
     # Treat 2D weight as fully connected
-    encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype(np.uint16)
-    encoding_bits[np.where(encoding_bits == 0)] = 1
-    encoding_type = (BIN, BIN)
+    num_encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype(np.uint16)
+    num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
+    encoding_type = (EncodingType.BINARY, 
+                    EncodingType.BINARY)
     
-    row_col_encoding = make_row_col_encoding(encoding_type, 
-                                            param_shape, 
-                                            encoding_bits)
+    row_col_encoding = make_row_col_encoding(param_shape,
+                                            encoding_type, 
+                                            num_encoding_bits)
     row_col_encoding = row_col_encoding.reshape(*param_shape, -1)
     num_inputs = row_col_encoding.shape[-1]
 
     tiled_row_col_encodings = tile_matrix(row_col_encoding, 
-                                                row_tile_size, 
-                                                col_tile_size)
+                                        row_tile_size, 
+                                        col_tile_size)
 
     _shape = tiled_row_col_encodings.shape
     tiled_row_col_encodings = tiled_row_col_encodings.reshape(_shape[0], -1, _shape[-1])
-    gnet_sizes = (num_inputs, hidden_dim, hidden_dim // 2, 1)
+    gnet_sizes = (num_inputs, hidden_dim, 1)
     gnets = [GenomicBottleNet(gnet_sizes, output_scale) 
             for _ in range(num_row_tiles*num_col_tiles)]
     return tiled_row_col_encodings, gnets, (row_tile_size, col_tile_size)
@@ -104,13 +106,14 @@ def qkv_gnet_layer(param_shape, hidden_dim, output_scale, max_gnet_batch):
     num_row_tiles, num_col_tiles, row_tile_size, col_tile_size = get_tile_size(_param_shape, max_gnet_batch)
     
     # Treat 2D weight as fully connected
-    encoding_bits = np.ceil(np.log(_param_shape)/np.log(2)).astype(np.uint16)
-    encoding_bits[np.where(encoding_bits == 0)] = 1
-    encoding_type = (BIN, BIN)
+    num_encoding_bits = np.ceil(np.log(_param_shape)/np.log(2)).astype(np.uint16)
+    num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
+    encoding_type = (EncodingType.BINARY, 
+                    EncodingType.BINARY)
     
-    row_col_encoding = make_row_col_encoding(encoding_type, 
-                                            _param_shape, 
-                                            encoding_bits)
+    row_col_encoding = make_row_col_encoding(_param_shape,
+                                            encoding_type,
+                                            num_encoding_bits)
     
     row_col_encoding = row_col_encoding.reshape(*_param_shape, -1)
     num_inputs = row_col_encoding.shape[-1]

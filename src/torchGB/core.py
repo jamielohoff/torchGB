@@ -10,7 +10,7 @@ import torch.optim as optim
 import torch.distributed as dist
 from torch import Tensor
 
-from .utils import find_layer, assemble_matrix
+from .utils import assemble_matrix
 from .gnet import GenomicBottleNet, conv2d_gnet_layer, default_gnet_layer, qkv_gnet_layer
 from .lamb import Lamb
 
@@ -58,37 +58,28 @@ class GenomicBottleneck(nn.Module):
     Args:
         `model` (nn.Module): The neural network model.
         `hidden_dim` (int): The size of the hidden layers in the G-Nets.
-        `ignore_layers` (Optional[Sequence[str]]): A list of layer names and types
-                                                that should not be predicted
-                                                using a G-Net.
+        `ignore_layers` (Optional[Sequence[str]]): A list of layer names and 
+            types that should not be predicted using a G-Net.
     """
     gnetdict: Dict[str, GNetLayer]
     
     def __init__(self, 
                 model: nn.Module, 
                 hidden_dim: int = 64, 
-                lr: float = 2.5-4,
+                lr: float = 2.5e-4,
                 max_gnet_batchsize: int = 36_864,
-                ignore_layers: Optional[Sequence[str]] = []) -> None:
+                ignore_layers: Sequence[str] = []) -> None:
         super(GenomicBottleneck, self).__init__()             
         
         # Stores all the information about the gnets
         self.gnetdict = {}
-        load_per_rank = np.zeros(dist.get_world_size())  
-        i0 = 0
-                                      
+        load_per_rank = np.zeros(dist.get_world_size())           
         for pname, param in model.named_parameters():            
             ignore_layer = any([layer_name in pname for layer_name in ignore_layers])
             if param.requires_grad and not ignore_layer:
                 # This implements a rudimentary load balancer across devices
                 # that removes the bias towards the first device
                 device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
-                # if device_id == 0:
-                #     if i0 > 2:
-                #         device_id = np.where(load_per_rank[1:] == load_per_rank[1:].min())[0][-1]
-                #         device_id += 1
-                #     else:
-                #         i0 += 1
                 load_per_rank[device_id] += param.data.numel()
                 
                 if device_id == dist.get_rank():
@@ -96,18 +87,15 @@ class GenomicBottleneck(nn.Module):
                     print("Layer size:", np.array(param.shape))
                     print("Device ID:", device_id)   
 
-                    # Find layer with that parameter name in the model
-                    layer = find_layer(model, pname)    
-                    grad_scale = torch.tensor(1.) 
-                                          
                     # Normalizes the output to follow the initial parameter
-                    # distribution at initialization of the model                  
+                    # distribution at initialization of the model   
+                    grad_scale = torch.tensor(1.)                
                     with torch.no_grad():
                         output_scale = torch.std(param.data).to(device_id)
                     
                     param_shape = np.flip(np.array(param.data.shape))
                     
-                    if isinstance(layer, nn.Conv2d):
+                    if "Cob" in pname:
                         if "weight" in pname:
                             row_col_encoding, gnet = conv2d_gnet_layer(param_shape, 
                                                                         hidden_dim,
