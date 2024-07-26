@@ -45,8 +45,9 @@ class GenomicBottleNet(nn.Module):
         # self.apply(self.init_weights)
 
     def forward(self, x: Tensor) -> Tensor:
-        for layer in self.layers:
+        for layer in self.layers[:-1]:
             x = F.silu(layer(x))
+        x = self.layers[-1](x) # no non-linearity on the last layer
         output_scale = self.output_scale if self.output_scale > 1e-8 else torch.tensor(1.).to(self.output_scale.device)
         return output_scale * x
     
