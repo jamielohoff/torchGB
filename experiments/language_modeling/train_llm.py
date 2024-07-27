@@ -88,7 +88,7 @@ logger.debug(f"Rank: {rank}, World Size: {world_size}")
 
 
 # Initialize experiment hyperparameters
-experiment_config = load_config(args.config)
+experiment_config = load_config("config/" + args.config)
 EPOCHS = experiment_config["epochs"]
 BATCHSIZE = args.batchsize
 SEQ_LEN = experiment_config["model"]["seq_len"]
@@ -100,7 +100,7 @@ global_step = 0
 
 
 # Initialize the data directory
-base_config = load_config("base_config.yml")
+base_config = load_config("config/base_config.yml")
 prefix = base_config["data_dirs"]["prefix"]
 data_dir = prefix + base_config["data_dirs"][args.language]
 logger.debug(f"Data directory: {data_dir}")
