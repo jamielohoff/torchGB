@@ -1,38 +1,56 @@
-
-from typing import Any, Sequence, Tuple
+from enum import Enum
+from typing import Sequence, Tuple
+import copy
 
 import torch
-import torch.nn as nn
 import numpy as np
 
 
-def tile_matrix(arr, row_size: int, col_size: int):
+class EncodingType(Enum):
+    ONEHOT = 0 # One-hot vector
+    BINARY = 1 # Binary code
+
+
+def tile_matrix(arr: torch.Tensor, row_size: int, col_size: int):
     """
     Return an array of shape (n, row_size, col_size) where
     n * row_size * col_size = arr.size
 
     If arr is a 2D array, the returned array should look like n subblocks with
     each subblock preserving the "physical" layout of arr.
+    
+    Args:
+        `arr` (torch.Tensor): The input array to be tiled. Has to be two-dimensional.
+        `row_size` (int): The number of rows in each subtile.
+        `col_size` (int): The number of columns in each subtile.
+        
+    Returns:
+        torch.Tensor: The tiled array.
     """
-    h, w, c = arr.shape
+    h, w = arr.shape
+    assert len(arr.shape) == 2, "Input array must be 3D"
     assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
     assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
-    return (arr.reshape(h // row_size, row_size, -1, col_size, c)
+    return (arr.reshape(h // row_size, row_size, -1, col_size)
                .swapaxes(1, 2)
-               .reshape(-1, row_size, col_size, c))
+               .reshape(-1, row_size, col_size))
     
 
 def assemble_matrix(arr: torch.Tensor, arr_shape: Tuple[int, int]) -> torch.Tensor:
     """
-    NOTE is NOT the inverse operation to `tile_matrix`
-    Return an array of shape (n, row_size, col_size) where
-    n * row_size * col_size = arr.size
-
-    If arr is a 2D array, the returned array should look like n subblocks with
-    each subblock preserving the "physical" layout of arr.
+    NOTE This is the inverse of tile_matrix. This function reassembles the 
+    original array from its tiled form. The input array must be 3D.
+    
+    Args:
+        `arr` (torch.Tensor): The input array in its tiled form.
+        `arr_shape` (Tuple[int, int]): The shape of the reassembled array.
+        
+    Returns:
+        torch.Tensor: The reassembled array.
     """
     h, w = arr_shape
     row_size, col_size = arr.shape[1:]
+    assert len(arr.shape) == 3, "Input array must be 3D"
     assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
     assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
     return (arr.reshape(h // row_size, -1, row_size, col_size)
@@ -40,7 +58,21 @@ def assemble_matrix(arr: torch.Tensor, arr_shape: Tuple[int, int]) -> torch.Tens
                 .reshape(h, w))
     
     
-def get_tile_size(param_shape: Tuple[int, int], max_gnet_batch: int) -> Tuple[int, int]:
+def get_tile_size(param_shape: Tuple[int, int], 
+                max_gnet_batch: int) -> Tuple[int, int, int, int]:
+    """
+    This function calculates the number of row and column tiles for a given
+    weight matrix shape and maximum parameter count per tile. The number of row 
+    and column tiles is calculated such that the number of parameters in each
+    tile is less than or equal to the maximum parameter count per tile.
+
+    Args:
+        param_shape (Tuple[int, int]): Shape of the weight matrix.
+        max_gnet_batch (int): Maximum number of parameters per tile.
+
+    Returns:
+        Tuple[int, int]: The number of row and column tiles.
+    """
     row_size, col_size = param_shape
     
     numel = np.prod(param_shape)
@@ -54,191 +86,81 @@ def get_tile_size(param_shape: Tuple[int, int], max_gnet_batch: int) -> Tuple[in
     return num_row_tiles, num_col_tiles, row_tile_size, col_tile_size
 
 
-def find_layer(model: nn.Module, pname: str) -> nn.Module:
+def make_row_col_encoding(param_shape: Sequence[int], 
+                        encoding_types: Sequence[EncodingType],
+                        num_encoding_bits: Sequence[int]) -> np.ndarray:
     """
-    Inverse layer lookup function
-    This function iterates through named modules in the model and finds 
-    the layer that matches the given parameter name
+    This function creates inputs for the G-Nets that encode the position of the
+    weights in the weight matrix. The encoding can either be done using one-hot
+    encoding or binary encoding. The function will return a tensor that has the
+    same number of rows as the number of weights in the weight matrix and the
+    number of columns equal to the sum of the number of bits for each variable.
+    
+    Examples:
+    
     
     Args:
-        `model` (nn.Module): _description_
-        `pname` (str): _description_
+        `param_shape` (Sequence[int]): Shape of the weight matrix.
+        `encoding_types` (Sequence[EncodingType]): Encoding type for each axis.
+        `num_encoding_bits` (Sequence[int]): Number of bits for each axis.
         
     Returns:
-        nn.Module: _description_
+        np.ndarray: Array of shape (np.prod(dims), np.sum(bits)).
     """
-    layer, mname = [], []
-                
-    # This is awful
-    for _mname, _layer in model.named_modules():
-        for name in _layer.state_dict().keys():
-            _pname = _mname + "." + name
-            if _pname == pname:
-                if _mname == mname:
-                    layer = _layer
-                    return layer
-    
-    return layer
+    param_shape, num_encoding_bits = np.atleast_1d(param_shape, num_encoding_bits)
+    row_col_encoding = np.zeros((param_shape.prod(), num_encoding_bits.sum()))
+    num_encoding_types = len(encoding_types)
 
-
-def set_encoding_type(dlist: Sequence[int], idx: int, t: int) -> None:
-    """
-    TODO docstring
-    TODO refactor this
-
-    Args:
-        `dlist` (Sequence[int]): _description_
-        `idx` (int): _description_
-        `t` (int): _description_
-
-    Raises:
-        ValueError: _description_
-    """
-    if t == 1:        # one-hot vector
-        dlist[idx] = idx
-    elif t == 2:        # plain binary code
-        # b = np.array(list(np.binary_repr(idx).zfill(npbits[i]))).astype(np.int8)
-        b = idx
-        dlist[idx] = b
-    elif t == 3:        # Gray code
-        #b = np.array(list(np.binary_repr(idx ^ (idx >> 1)).zfill(npbits[i]))).astype(np.int8)
-        b = idx ^ (idx >> 1)
-        dlist[idx] = b 
-    elif t == 4:        # Linear code
-        b = idx
-        dlist[idx] = b 
+    # This will compute the encoding for axis i
+    def get_encoding_for_dim(i: int) -> np.ndarray:
+        # Compute the encoding for the i-th axis
+        shape = np.ones(param_shape.size, dtype=np.int16)
+        shape[i] = param_shape[i]
+        dim_encoding = np.arange(param_shape[i]).reshape(shape)
         
-    elif t == 5:        # Random code
-        dlist[idx] = idx 
-    else:
-        raise ValueError("Unknown nptype")
+        # Replicate the encoding for the other axes
+        tiling = copy.copy(param_shape)
+        tiling[i] = 1
+        dim_encoding = np.tile(dim_encoding, tiling)   
 
+        # Flatten the encoding
+        dim_encoding = np.reshape(dim_encoding, (np.prod(param_shape), 1))
 
-def make_row_col_encoding(types: Sequence[int], 
-                        dims: Sequence[int], 
-                        bits: Sequence[int], 
-                        extras: Any = ()) -> np.array:
-    """
-    TODO refactor this
-    This function creates the inputs and targets used for the training of the
-    genomic networks. 
-    
-    Examples of calling this for 2-layer MNIST
-
-    randomVector = np.random.random_sample((800,3))
-    W, GC       = generateGDNlayer((GRY,GRY,RND),[28,28,800],[5,5,3], ((),(),randomVector))
-    b, GCbias   = generateGDNlayer((RND),[800],[3],(randomVector,(),()))
-    W2, GC2      = generateGDNlayer((RND,HOT),[800,10],[3,10],(randomVector,(),()))
-    
-    Arguments:
-        `types` (Sequence[int]): list of types of encoding for each variable
-        `dims` (Sequence[int]): list of dimensions for each variable
-        `bits` (Sequence[int]): list of bits for each variable
-        `extras` (Any): additional information for each variable
-        
-    Returns:
-        - Tuple[np.array, np.array]: Tuple of targets and inputs [W, GC]
-    """
-    npdims, nptypes, npbits = np.atleast_1d(dims, types, bits)
-    
-    # Make a row vector so that the shape matches the output
-    weight = np.zeros(npdims.prod()).flatten()      
-    weight = np.expand_dims(weight, 1)                  
-    weight = torch.tensor(weight, dtype=torch.float32)
-
-    row_col_encoding = np.zeros((npdims.prod(), npbits.sum()))
-       
-    # This will make a list of arrays for each variable    
-    var_list = []
-    
-    for i in range(np.size(nptypes)):
-        dlist = np.zeros((npdims[i], 1)).astype(np.int16)
-                        
-        for idx in range(npdims[i]):
-            set_encoding_type(dlist, idx, nptypes[i])
-        var_list.append(dlist)
-        
-    # This will add extra dimensions to the array
-    expanded_vars = []
-    for i in range(np.size(nptypes)):
-        shape = np.ones(npdims.size).astype(np.int16)
-        shape[i] = npdims[i]
-        
-        dlist = np.reshape(var_list[i], shape)
-        expanded_vars.append(dlist)
-        
-    # This will tile singular dimensions        
-    expanded_tiled_vars = []
-
-    for i in range(np.size(nptypes)):
-        shape = npdims.astype(np.int16)
-        # Set the relevant shape to 1
-        shape[i] = 1  
-        
-        # Tile the variables along all dims but one
-        dlist = np.tile(expanded_vars[i], shape)   
-        # Make a string out of it...WTF why?          
-        dlist = np.reshape(dlist,(np.prod(dims), 1), order='F')
-        
-        if nptypes[i] == 1:                                     # One-hot vector
-            max_hot = np.max(dlist)+1
-            hots = np.zeros((max_hot,max_hot), dtype=np.int8)
+        if encoding_types[i].value == 0:
+            max_hot = dim_encoding.max() + 1
+            one_hot_encoding = np.zeros((param_shape[i], max_hot), dtype=np.int16)
+            one_hot_encoding[np.arange(param_shape[i]), dim_encoding.squeeze()] = 1
             
-            for j in range(max_hot):
-                hots[j,j] = 1
-                
-            hots = hots.astype(np.int8)
-            dlist = hots[dlist.squeeze(),:]
-            
-            if len(dlist.shape)==1:                             # expand dimensions (for 1 var output)
-                dlist = np.reshape(dlist, (dlist.shape[0],1))
-
-        if nptypes[i] == 4:                                     # Linear (non-binary) code
-            dlist = dlist #.squeeze()                           # remove singular dimensions 
-            
-        if (nptypes[i] == 2)|(nptypes[i] == 3):                 # binary code
-        
-            max_bits = npbits[i]
-            max_bins = 2 ** max_bits
-            bins = np.zeros((max_bins,max_bits), dtype=np.int8)
+        # TODO this can be optimized further
+        elif encoding_types[i].value == 1: # Binary code
+            max_bits = num_encoding_bits[i]
+            num_digits = 2 ** max_bits
+            bins = np.zeros((num_digits, max_bits), dtype=np.int16)
             
             # This will be used for binary conversion
-            for j in range(max_bins):
-                bins[j,:] = np.array(list(np.binary_repr(j).zfill(max_bits))).astype(np.int8)
+            for j in range(num_digits):
+                bins[j, :] = np.array(list(np.binary_repr(j).zfill(max_bits))).astype(np.int16)
                 
-            dlist = bins[dlist.squeeze(),:]                     # convert to binary numbers 
-            
-            if len(dlist.shape)==1:                             # expand dimensions (for 1 var output)
-                dlist = np.reshape(dlist, (dlist.shape[0],1))
-            
-            dlist = dlist[:,(max_bits-npbits[i]):(max_bits)]      # take only the lowest bits
-            
-        if nptypes[i] == 5:                                     # random vectors
-            dlist = extras[i][dlist.squeeze(),:];               # add the vector of predefined random numbers
-            
-            if len(dlist.shape)==1:                             # expand dimensions (for 1 var output)
-                dlist = np.reshape(dlist, (dlist.shape[0],1))
-        
-        expanded_tiled_vars.append(dlist)
-        
-    all_vars = expanded_tiled_vars[0]
+            # Convert to binary numbers 
+            # Take only the lowest bits
+            dim_encoding = bins[dim_encoding.squeeze(), :] 
+            dim_encoding = dim_encoding[:, (max_bits - num_encoding_bits[i]):(max_bits)] 
+        else:
+            raise ValueError("Invalid encoding type!")
+        return dim_encoding
     
-    for i in range(1, np.size(nptypes)):
-        all_vars = np.concatenate((expanded_tiled_vars[i], all_vars), axis=1)
-        
-    # This will detach all GC tensors from the computational graph and thus
-    # they will not be differentiated
-    row_col_encoding = torch.tensor(all_vars, dtype=torch.float, requires_grad=False)
-    
-    # Check if rows exceed threshold (for what?)
-    for i in range(row_col_encoding.shape[1]):
-        maxCol = torch.max(row_col_encoding[:,i])
-        if maxCol > 1e-6:
-            row_col_encoding[:,i] = row_col_encoding[:,i]/maxCol
-            
-    # Normalize the row_col_encoding so that it has zero mean and unit variance
+    encoded_dims = [get_encoding_for_dim(i) for i in range(num_encoding_types)]
+    row_col_encoding = np.concatenate(encoded_dims, axis=1)
+
+    # Make inputs a torch tensor and detach from computational graph
+    row_col_encoding = torch.tensor(row_col_encoding, 
+                                    dtype=torch.float, 
+                                    requires_grad=False)
+
+    # Normalization for Xavier initialization
     with torch.no_grad():
-        row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / torch.std(row_col_encoding) # Xavier
-    
+        row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / \
+                            torch.std(row_col_encoding)
+        row_col_encoding -= row_col_encoding.min() # inputs larger than 0
     return row_col_encoding   
 

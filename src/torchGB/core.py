@@ -10,7 +10,7 @@ import torch.optim as optim
 import torch.distributed as dist
 from torch import Tensor
 
-from .utils import find_layer, assemble_matrix
+from .utils import assemble_matrix
 from .gnet import GenomicBottleNet, conv2d_gnet_layer, default_gnet_layer, qkv_gnet_layer
 from .lamb import Lamb
 
@@ -23,14 +23,15 @@ class GNetLayer:
     Args:
         `name` (str): Name of the layer parameter predicted by the G-Net.
         `rank` (int): Rank of the device where the G-Net is stored.
-        `gnets` (GenomicBottleNet): Sequence of G-Net models. This is typically 
-                                    a MLP.
-        `optimizer` (optim.Optimizer): The optimizer used to train the G-Net.
-        `gnet_input` (Tensor): The input to the G-Net. This is a constant tensor
-                            that is used to predict the new weights of the layer.
-                            It encodes the (i,j)-position of every weight in the
-                            parameter matrix of the layer.
-        `weights` (Tensor): The new weights predicted by the G-Net.
+        `gnets` (Sequence[GenomicBottleNet]): Sequence of G-Net models. 
+            This is typically a list of MLPs.
+        `optimizers` (Sequence[optim.Optimizer]): The optimizers used to train 
+            all the the G-Nets.
+        `gnet_input` (Tensor): The input to the G-Net. This is a 
+            constant tensor that is used to predict the new weights of the 
+            layer. They encode the (i,j)-position of every weight in the 
+            parameter matrix of the layer.
+        `weights` (Tensor): The weights predicted by the G-Net.
         `grad_scale` (float): The scaling factor for the gradients.   
     """
     name: str
@@ -38,7 +39,7 @@ class GNetLayer:
     tile_shape: Optional[Tuple[int, int]] = None
     gnets: Optional[Sequence[GenomicBottleNet]] = None
     optimizers: Optional[Sequence[optim.Optimizer]] = None
-    gnets_inputs: Optional[Sequence[Tensor]] = None
+    gnet_input: Optional[Sequence[Tensor]] = None
     weights: Optional[Tensor] = None
     grad_scale: Optional[float] = None
 
@@ -58,80 +59,69 @@ class GenomicBottleneck(nn.Module):
     Args:
         `model` (nn.Module): The neural network model.
         `hidden_dim` (int): The size of the hidden layers in the G-Nets.
-        `ignore_layers` (Optional[Sequence[str]]): A list of layer names and types
-                                                that should not be predicted
-                                                using a G-Net.
+        `lr` (float): The learning rate of the G-Nets.
+        `max_gnet_batchsize` (int): The maximum number of parameters per tile.
+        `ignore_layers` (Optional[Sequence[str]]): A list of layer names and 
+            types that should not be predicted using a G-Net.
+
     """
     gnetdict: Dict[str, GNetLayer]
     
     def __init__(self, 
                 model: nn.Module, 
-                hidden_dim: int = 64, 
-                lr: float = 2.5-4,
+                hidden_dim: int = 32, 
+                lr: float = 1e-3,
                 max_gnet_batchsize: int = 36_864,
-                ignore_layers: Optional[Sequence[str]] = []) -> None:
+                ignore_layers: Sequence[str] = []) -> None:
         super(GenomicBottleneck, self).__init__()             
         
         # Stores all the information about the gnets
         self.gnetdict = {}
-        load_per_rank = np.zeros(dist.get_world_size())  
-        i0 = 0
-                                      
+        load_per_rank = np.zeros(dist.get_world_size())           
         for pname, param in model.named_parameters():            
             ignore_layer = any([layer_name in pname for layer_name in ignore_layers])
             if param.requires_grad and not ignore_layer:
                 # This implements a rudimentary load balancer across devices
                 # that removes the bias towards the first device
                 device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
-                # if device_id == 0:
-                #     if i0 > 2:
-                #         device_id = np.where(load_per_rank[1:] == load_per_rank[1:].min())[0][-1]
-                #         device_id += 1
-                #     else:
-                #         i0 += 1
                 load_per_rank[device_id] += param.data.numel()
                 
-                if device_id == dist.get_rank():
-                    print("Creating G-Net for layer:", pname)
-                    print("Layer size:", np.array(param.shape))
-                    print("Device ID:", device_id)   
-
-                    # Find layer with that parameter name in the model
-                    layer = find_layer(model, pname)    
-                    grad_scale = torch.tensor(1.) 
-                                          
+                if device_id == dist.get_rank():  
                     # Normalizes the output to follow the initial parameter
-                    # distribution at initialization of the model                  
+                    # distribution at initialization of the model   
+                    grad_scale = torch.tensor(1.).to(device_id)           
                     with torch.no_grad():
                         output_scale = torch.std(param.data).to(device_id)
                     
-                    param_shape = np.flip(np.array(param.data.shape))
-                    
-                    if isinstance(layer, nn.Conv2d):
+                    if "Conv2d" in pname:
                         if "weight" in pname:
-                            row_col_encoding, gnet = conv2d_gnet_layer(param_shape, 
-                                                                        hidden_dim,
-                                                                        output_scale,
-                                                                        max_gnet_batchsize)    
+                            row_col_encodings, gnets, tile_shape = conv2d_gnet_layer(param.data.shape, 
+                                                                                    hidden_dim,
+                                                                                    output_scale,
+                                                                                    max_gnet_batchsize)    
                     elif "in_proj_weight" in pname:
-                        row_col_encodings, gnets, tile_shape = qkv_gnet_layer(param_shape, 
+                        row_col_encodings, gnets, tile_shape = qkv_gnet_layer(param.data.shape, 
                                                                                 hidden_dim,
                                                                                 output_scale,
                                                                                 max_gnet_batchsize)  
                         gnets = [gnet.to(device_id) for gnet in gnets]
-                        print("Number of g-nets:", len(gnets))
-                        optimizers = [Lamb(gnet.parameters(), lr=lr) for gnet in gnets]
+                        row_col_encodings = row_col_encodings.to(device_id)
+                        num_layers = len(gnets[0].sizes)
+                        _lr = lr / np.sqrt(output_scale.item()*num_layers)
+                        optimizers = [Lamb(gnet.parameters(), lr=_lr) for gnet in gnets]
                                     
                     else:                        
                         if param.data.ndim == 2:
                             # Treat 2D weight as fully connected                            
-                            row_col_encodings, gnets, tile_shape = default_gnet_layer(param_shape, 
+                            row_col_encodings, gnets, tile_shape = default_gnet_layer(param.data.shape, 
                                                                                         hidden_dim,
                                                                                         output_scale,
                                                                                         max_gnet_batchsize)
                             gnets = [gnet.to(device_id) for gnet in gnets]
-                            print("Number of g-nets:", len(gnets))
-                            optimizers = [Lamb(gnet.parameters(), lr=lr) for gnet in gnets]
+                            row_col_encodings = row_col_encodings.to(device_id)
+                            num_layers = len(gnets[0].sizes)
+                            _lr = lr / np.sqrt(output_scale.item()*num_layers)
+                            optimizers = [Lamb(gnet.parameters(), lr=_lr) for gnet in gnets]
                     # TODO reintegrate this
                     # Add layer to the dict                                                          
                     # pname_cut = pname.split("weight")[0] # that's a sloppy way to do that
@@ -143,14 +133,19 @@ class GenomicBottleneck(nn.Module):
                             
                     # if isinstance(layer, nn.Conv2d):
                     #     grad_scale = _out_size[-1][-1]
+                    print(f"Creating G-Net for layer: {pname}\n"
+                        f"Layer size: {np.array(param.shape)}\n"
+                        f"Device ID: {device_id}\n"
+                        f"Number of g-nets: {len(gnets)}\n"
+                        f"Learning rate: {_lr}")
                     self.gnetdict[pname] = GNetLayer(name=pname,
                                                     rank=device_id,
                                                     tile_shape=tile_shape,
                                                     gnets=gnets,
                                                     optimizers=optimizers,
-                                                    gnets_inputs=row_col_encodings.to(device_id),
+                                                    gnet_input=row_col_encodings,
                                                     weights=param.data,
-                                                    grad_scale=grad_scale.to(device_id))
+                                                    grad_scale=grad_scale)
                 else:
                     self.gnetdict[pname] = GNetLayer(name=pname, rank=device_id)
                                             
@@ -159,7 +154,7 @@ class GenomicBottleneck(nn.Module):
         for name in self.gnetdict.keys():
             output_str += f"Parameter={name}\n" \
                         f"Parameter shape={self.gnetdict[name].weights.shape}\n" \
-                        f"G-Net input shape={self.gnetdict[name].gnet_inputs.shape}\n\n"
+                        f"G-Net input shape={self.gnetdict[name].gnet_input.shape}\n\n"
         return output_str
                                                                          
     def get_num_params_gnet(self) -> int:
@@ -170,28 +165,45 @@ class GenomicBottleneck(nn.Module):
         Returns:
             int: Cumulative number of parameters of all G-Nets.
         """
-        num_params = torch.tensor([0]).to(dist.get_rank()) 
+        num_params = torch.tensor(0).to(dist.get_rank()) 
         
         for name in self.gnetdict.keys():
             n = 0
             if self.gnetdict[name].gnets is not None:
                 for gnet in self.gnetdict[name].gnets:
                     n += sum(param.numel() for _, param in gnet.named_parameters())
-            num_params += torch.tensor([n]).to(dist.get_rank())
+            num_params += torch.tensor(n).to(dist.get_rank())
         
         dist.all_reduce(num_params, op=dist.ReduceOp.SUM)
         return num_params.item()
     
-    def compression(self, model) -> float:
+    def get_num_params_no_gnet(self, model: nn.Module) -> int:
         """
-        `WARNING`: This function is currently totally inaccurate!
+        Because gnets are now stored decentralized across devices, we need to
+        compute them separately and then sum them up with a all_reduce operation.
+        
+        Args:
+            `model` (nn.Module): The neural network model.
+        
+        Returns:
+            int: Cumulative number of parameters of which have no G-Nets attached.
+        """
+        return sum([param.numel() for pname, param in model.named_parameters()
+                    if not pname in self.gnetdict.keys()])
+    
+    def compression(self, model: nn.Module) -> float:
+        """
         This function computes the compression ratio of the G-Net to the model.
+        
+        Args:
+            `model` (nn.Module): The neural network model.
 
         Returns:
             float: Compression factor of the G-Net with respect to the model.
         """
         num_model_params = sum(p.numel() for p in model.parameters())
-        num_gnet_params = self.get_num_params_gnet()
+        num_gnet_params = self.get_num_params_gnet() 
+        num_gnet_params += self.get_num_params_no_gnet(model)
         
         compression = num_model_params / num_gnet_params
         return compression
@@ -276,10 +288,11 @@ class GenomicBottleneck(nn.Module):
                 if self.gnetdict[name].rank == dist.get_rank():
                     new_weights = []
                     tile_shape = self.gnetdict[name].tile_shape
-                    for gnet_input, gnet in zip(self.gnetdict[name].gnets_inputs, self.gnetdict[name].gnets):
+                    for gnet in self.gnetdict[name].gnets:
+                        gnet_input = self.gnetdict[name].gnet_input
                         new_weight_tile = gnet(gnet_input)
                         new_weight_tile = new_weight_tile.reshape(tile_shape)
-                        new_weights.append(new_weight_tile.t())
+                        new_weights.append(new_weight_tile)
                         
                     # Assemble the new weight tiles into the full weight matrix
                     new_weights = torch.stack(new_weights, dim=0)
