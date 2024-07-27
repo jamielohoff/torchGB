@@ -64,6 +64,9 @@ parser.add_argument("--load_dataloader_state", action="store_true",
 parser.add_argument("--scheduler", action="store_true",
                     help="Whether to use a warmup schedule or not.")
 
+parser.add_argument("--config", type=str, default="experiment_config.yml",
+                    help="Experiment configuration.")
+
 args = parser.parse_args()
 
 
@@ -85,7 +88,7 @@ logger.debug(f"Rank: {rank}, World Size: {world_size}")
 
 
 # Initialize experiment hyperparameters
-experiment_config = load_config("experiment_config.yml")
+experiment_config = load_config(args.config)
 EPOCHS = experiment_config["epochs"]
 BATCHSIZE = args.batchsize
 SEQ_LEN = experiment_config["model"]["seq_len"]
