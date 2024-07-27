@@ -17,8 +17,10 @@ from datasets import load_dataset
 
 from torchGB import GenomicBottleneck
 from _transformer import GPT, generate_square_subsequent_mask
-from config import load_config, commit_to_experiments_branch
-from utils import get_dataloader, load_model_layers
+from utils import (get_dataloader, 
+                    load_model_layers, 
+                    load_config, 
+                    commit_to_experiments_branch)
 
 parser = argparse.ArgumentParser()
 
