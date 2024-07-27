@@ -131,6 +131,7 @@ def make_row_col_encoding(param_shape: Sequence[int],
             one_hot_encoding = np.zeros((param_shape[i], max_hot), dtype=np.int16)
             one_hot_encoding[np.arange(param_shape[i]), dim_encoding.squeeze()] = 1
             
+        # TODO this can be optimized further
         elif encoding_types[i].value == 1: # Binary code
             max_bits = num_encoding_bits[i]
             num_digits = 2 ** max_bits
@@ -156,10 +157,10 @@ def make_row_col_encoding(param_shape: Sequence[int],
                                     dtype=torch.float, 
                                     requires_grad=False)
 
-    # Xavier normalization
+    # Normalization for Xavier initialization
     with torch.no_grad():
         row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / \
                             torch.std(row_col_encoding)
-        row_col_encoding -= row_col_encoding.min()
+        row_col_encoding -= row_col_encoding.min() # inputs larger than 0
     return row_col_encoding   
 

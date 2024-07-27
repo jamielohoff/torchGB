@@ -24,6 +24,7 @@ class GenomicBottleNet(nn.Module):
         float: Prediction of the new weight.
     """
     layers: nn.ModuleList
+    sizes: Sequence[int]
     output_scale: float
     
     def __init__(self, 
@@ -32,6 +33,7 @@ class GenomicBottleNet(nn.Module):
         assert len(sizes) > 1, "List must have at least 3 entries!"
         super(GenomicBottleNet, self).__init__()
         self.output_scale = output_scale
+        self.sizes = sizes
         length = len(sizes) - 1
         self.layers = nn.ModuleList([nn.Linear(sizes[i], sizes[i+1]) 
                                     for i in range(length)])

@@ -70,7 +70,7 @@ class GenomicBottleneck(nn.Module):
     def __init__(self, 
                 model: nn.Module, 
                 hidden_dim: int = 32, 
-                lr: float = 2.5e-4,
+                lr: float = 1e-3,
                 max_gnet_batchsize: int = 36_864,
                 ignore_layers: Sequence[str] = []) -> None:
         super(GenomicBottleneck, self).__init__()             
@@ -106,7 +106,9 @@ class GenomicBottleneck(nn.Module):
                                                                                 max_gnet_batchsize)  
                         gnets = [gnet.to(device_id) for gnet in gnets]
                         row_col_encodings = row_col_encodings.to(device_id)
-                        optimizers = [Lamb(gnet.parameters(), lr=lr) for gnet in gnets]
+                        num_layers = len(gnets[0].sizes)
+                        _lr = lr / np.sqrt(output_scale.item()*num_layers)
+                        optimizers = [Lamb(gnet.parameters(), lr=_lr) for gnet in gnets]
                                     
                     else:                        
                         if param.data.ndim == 2:
@@ -117,7 +119,9 @@ class GenomicBottleneck(nn.Module):
                                                                                         max_gnet_batchsize)
                             gnets = [gnet.to(device_id) for gnet in gnets]
                             row_col_encodings = row_col_encodings.to(device_id)
-                            optimizers = [Lamb(gnet.parameters(), lr=lr) for gnet in gnets]
+                            num_layers = len(gnets[0].sizes)
+                            _lr = lr / np.sqrt(output_scale.item()*num_layers)
+                            optimizers = [Lamb(gnet.parameters(), lr=_lr) for gnet in gnets]
                     # TODO reintegrate this
                     # Add layer to the dict                                                          
                     # pname_cut = pname.split("weight")[0] # that's a sloppy way to do that
@@ -129,10 +133,11 @@ class GenomicBottleneck(nn.Module):
                             
                     # if isinstance(layer, nn.Conv2d):
                     #     grad_scale = _out_size[-1][-1]
-                    print(f"Creating G-Net for layer: {pname}"
-                        f"Layer size: {np.array(param.shape)}"
-                        f"Device ID: {device_id}"
-                        f"Number of g-nets: {len(gnets)}")
+                    print(f"Creating G-Net for layer: {pname}\n"
+                        f"Layer size: {np.array(param.shape)}\n"
+                        f"Device ID: {device_id}\n"
+                        f"Number of g-nets: {len(gnets)}\n"
+                        f"Learning rate: {_lr}")
                     self.gnetdict[pname] = GNetLayer(name=pname,
                                                     rank=device_id,
                                                     tile_shape=tile_shape,
