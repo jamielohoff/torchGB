@@ -171,8 +171,7 @@ test_dataset = load_dataset("arrow",
                             split="test",
                             streaming=True)
 
-
-train_loader = get_dataloader(train_dataset, rank, world_size, stateful=True)
+train_loader = get_dataloader(train_dataset, rank, world_size, BATCHSIZE, stateful=True)
 
 
 # Initialize the model and optimizers
@@ -199,7 +198,7 @@ if args.load_model is not None:
         SEED = state_dict["seed"]
         
         train_dataset.shuffle(seed=SEED, buffer_size=10_000)
-        train_loader = get_dataloader(train_dataset, rank, world_size, stateful=True)
+        train_loader = get_dataloader(train_dataset, rank, world_size, BATCHSIZE, stateful=True)
         train_loader.load_state_dict(state_dict["dataloader"])
         
         logger.info(f"Loaded dataloader state from {args.load_model} "
@@ -356,11 +355,11 @@ def evaluate(model: nn.Module, eval_loader) -> torch.Tensor:
 
 
 # Compute initial validation loss
-val_loader = get_dataloader(val_dataset, rank, world_size)
+val_loader = get_dataloader(val_dataset, rank, world_size, BATCHSIZE)
 val_loss = evaluate(model, val_loader)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
 val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
-val_loader = get_dataloader(val_dataset, rank, world_size)
+val_loader = get_dataloader(val_dataset, rank, world_size, BATCHSIZE)
 
 
 # Initialize metrics logging on rank 0
@@ -399,14 +398,14 @@ for epoch in range(EPOCHS):
     SEED += 1
     train_dataset = train_dataset.shuffle(seed=SEED, buffer_size=10_000)
     val_dataset = val_dataset.shuffle(seed=SEED, buffer_size=10_000)
-    train_loader = get_dataloader(train_dataset, rank, world_size, stateful=True)
-    val_loader = get_dataloader(val_dataset, rank, world_size)
+    train_loader = get_dataloader(train_dataset, rank, world_size, BATCHSIZE, stateful=True)
+    val_loader = get_dataloader(val_dataset, rank, world_size, BATCHSIZE)
     writer.flush()
 
 
 # Evaluate the best model on the test dataset
 test_dataset = test_dataset.shuffle(seed=SEED, buffer_size=10_000)
-test_loader = get_dataloader(test_dataset, rank, world_size)
+test_loader = get_dataloader(test_dataset, rank, world_size, 4*BATCHSIZE)
 model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["model"])
 
 test_loss = evaluate(model.to(rank), test_loader) 

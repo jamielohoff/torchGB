@@ -69,9 +69,9 @@ def commit_to_experiments_branch(project_root: str):
 def get_dataloader(dataset, 
                     rank: int, 
                     world_size: int, 
+                    batchsize: int,
                     num_workers: int = 8, 
                     prefetch_factor: int = 4, 
-                    batchsize: int = 16, 
                     stateful: bool = False) -> DataLoader:
     node_data = split_dataset_by_node(dataset, rank=rank, world_size=world_size)
     loader = StatefulDataLoader if stateful else DataLoader
