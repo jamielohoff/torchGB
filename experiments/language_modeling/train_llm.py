@@ -270,15 +270,15 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
 
         if enable_gnets:
             gnets.zero_grad()
-            gnets.predict_weights(model)
-
+            gnets.predict_weights(model) # implicitly updates the model weights!
+    
         output = model(data[:, :-1], src_mask)
         loss = criterion(output.view(-1, VOCAB_SIZE), data[:, 1:].reshape(-1))
 
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 0.25)
-        if enable_gnets: gnets.backward(model)
-        
+        if enable_gnets: gnets.backward()
+      
         optimizer.step()
         if scheduler is not None: scheduler.step()
         if enable_gnets: gnets.step()
@@ -287,17 +287,17 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         # Logging
         if global_step % LOG_INTERVAL == 0:
             ms_per_batch = (time.time() - start_time) * 1000 / LOG_INTERVAL
-            loss = torch.tensor([total_loss / LOG_INTERVAL]).to(rank)
+            train_loss = torch.tensor([total_loss / LOG_INTERVAL]).to(rank)
             dist.barrier()
-            dist.all_reduce(loss, op=dist.ReduceOp.AVG)
-            loss = loss.cpu().item()
-            ppl = np.exp(loss)
+            dist.all_reduce(train_loss, op=dist.ReduceOp.AVG)
+            train_loss = train_loss.cpu().item()
+            ppl = np.exp(train_loss)
 
             if rank == 0:
                 logger.debug(f"epoch {epoch:3d} | {global_step:5d} batches | "
                             f"ms/batch {ms_per_batch:5.2f} | "
-                            f"loss {loss:5.2f} | ppl {ppl:8.2f}")
-                writer.add_scalar("loss/train", loss, global_step=global_step)
+                            f"loss {train_loss:5.2f} | ppl {ppl:8.2f}")
+                writer.add_scalar("loss/train", train_loss, global_step=global_step)
                 writer.add_scalar("ppl/train", ppl, global_step=global_step)
             dist.barrier()
             
