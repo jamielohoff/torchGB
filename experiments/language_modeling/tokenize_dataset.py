@@ -31,7 +31,7 @@ print("Data directory:", data_dir)
 
 
 # Initialize the tokenizer
-tokenizer_path = os.path.join(base_config["tokenizer_path"], "oscar_2301_" + args.language)
+tokenizer_path = os.path.join(base_config["tokenizer_dir"], "oscar_2301_" + args.language)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 tokenizer.pad_token = tokenizer.eos_token
 

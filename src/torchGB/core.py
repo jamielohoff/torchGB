@@ -65,6 +65,7 @@ class GenomicBottleneck(nn.Module):
             types that should not be predicted using a G-Net.
 
     """
+    model: nn.Module
     gnetdict: Dict[str, GNetLayer]
     
     def __init__(self, 
@@ -74,6 +75,7 @@ class GenomicBottleneck(nn.Module):
                 max_gnet_batchsize: int = 36_864,
                 ignore_layers: Sequence[str] = []) -> None:
         super(GenomicBottleneck, self).__init__()             
+        self.model = model
         
         # Stores all the information about the gnets
         self.gnetdict = {}
@@ -86,7 +88,7 @@ class GenomicBottleneck(nn.Module):
                 device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
                 load_per_rank[device_id] += param.data.numel()
                 
-                if device_id == dist.get_rank():  
+                if device_id == dist.get_rank():
                     # Normalizes the output to follow the initial parameter
                     # distribution at initialization of the model   
                     grad_scale = torch.tensor(1.).to(device_id)           
@@ -98,17 +100,36 @@ class GenomicBottleneck(nn.Module):
                             row_col_encodings, gnets, tile_shape = conv2d_gnet_layer(param.data.shape, 
                                                                                     hidden_dim,
                                                                                     output_scale,
-                                                                                    max_gnet_batchsize)    
+                                                                                    max_gnet_batchsize)   
+                            # TODO reintegrate this
+                            # Add layer to the dict                                                          
+                            # pname_cut = pname.split("weight")[0] # that's a sloppy way to do that
+                            # pname_cut = pname_cut.split("bias")[0]
+                            # for name_tmp, layer_tmp in model.named_modules():
+                            #     if name_tmp == pname_cut:
+                            #         _out_size = get_tensor_dimensions(model, layer_tmp, input_shape)
+                            #         _out_size = torch.tensor(_out_size)
+                                    
+                            # if isinstance(layer, nn.Conv2d):
+                            #     grad_scale = _out_size[-1][-1] 
+                            gnets = [gnet.to(device_id) for gnet in gnets]
+                            row_col_encodings = row_col_encodings.to(device_id)
+                            num_layers = len(gnets[0].sizes)
+                            _lr = lr / np.sqrt(output_scale.item()*num_layers)
+                            optimizers = [Lamb(gnet.parameters(), lr=_lr) 
+                                            for gnet in gnets]
                     elif "in_proj_weight" in pname:
                         row_col_encodings, gnets, tile_shape = qkv_gnet_layer(param.data.shape, 
                                                                                 hidden_dim,
                                                                                 output_scale,
-                                                                                max_gnet_batchsize)  
+                                                                                max_gnet_batchsize) 
+
                         gnets = [gnet.to(device_id) for gnet in gnets]
                         row_col_encodings = row_col_encodings.to(device_id)
                         num_layers = len(gnets[0].sizes)
                         _lr = lr / np.sqrt(output_scale.item()*num_layers)
-                        optimizers = [Lamb(gnet.parameters(), lr=_lr) for gnet in gnets]
+                        optimizers = [Lamb(gnet.parameters(), lr=_lr) 
+                                        for gnet in gnets]
                                     
                     else:                        
                         if param.data.ndim == 2:
@@ -121,18 +142,9 @@ class GenomicBottleneck(nn.Module):
                             row_col_encodings = row_col_encodings.to(device_id)
                             num_layers = len(gnets[0].sizes)
                             _lr = lr / np.sqrt(output_scale.item()*num_layers)
-                            optimizers = [Lamb(gnet.parameters(), lr=_lr) for gnet in gnets]
-                    # TODO reintegrate this
-                    # Add layer to the dict                                                          
-                    # pname_cut = pname.split("weight")[0] # that's a sloppy way to do that
-                    # pname_cut = pname_cut.split("bias")[0]
-                    # for name_tmp, layer_tmp in model.named_modules():
-                    #     if name_tmp == pname_cut:
-                    #         _out_size = get_tensor_dimensions(model, layer_tmp, input_shape)
-                    #         _out_size = torch.tensor(_out_size)
-                            
-                    # if isinstance(layer, nn.Conv2d):
-                    #     grad_scale = _out_size[-1][-1]
+                            optimizers = [Lamb(gnet.parameters(), lr=_lr) 
+                                            for gnet in gnets]
+                    
                     print(f"Creating G-Net for layer: {pname}\n"
                         f"Layer size: {np.array(param.shape)}\n"
                         f"Device ID: {device_id}\n"
@@ -309,7 +321,7 @@ class GenomicBottleneck(nn.Module):
                 # rank `dist.get_rank()` to all other GPUs.
                 dist.broadcast(param_list[source_id][j], src=source_id)
     
-    def backward(self, model: nn.Module) -> None:
+    def backward(self) -> None:
         """
         This function takes the models gradients after a forward and 
         backward pass through the model and propagates them through the Gnet to
@@ -318,11 +330,11 @@ class GenomicBottleneck(nn.Module):
         Args:
             `model` (nn.Module): The neural network model.
         """              
-        for name, param in model.named_parameters():
+        for name, param in self.model.named_parameters():
             if name in self.gnetdict.keys():
                 if self.gnetdict[name].rank == dist.get_rank():
                     grad_scale = self.gnetdict[name].grad_scale
-                    norm_grad = torch.div(param.grad, grad_scale)
+                    norm_grad = param.grad / grad_scale
                     self.gnetdict[name].weights.backward(norm_grad)
                       
     def step(self) -> None:

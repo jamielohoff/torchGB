@@ -3,6 +3,7 @@ import sys
 import time
 import argparse
 from loguru import logger
+from tqdm import tqdm
 
 import numpy as np 
 
@@ -14,9 +15,10 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from datasets import load_dataset
+from transformers import AutoTokenizer
 
 from torchGB import GenomicBottleneck
-from _transformer import GPT, generate_square_subsequent_mask
+from _transformer import GPT, generate_square_subsequent_mask, predict_sequence
 from utils import (get_dataloader, 
                     load_model_layers, 
                     load_config, 
@@ -113,7 +115,7 @@ logger.debug(f"Cache directory: {cache_dir}")
 # Commit the current codebase to the experiments branch
 if rank == 0 and args.no_commit:
     project_root = base_config["project_root_dir"]
-    logger.info(f"Committing current codebase under {project_root} to the `experiments` branch...")
+    logger.info(f"Committing {project_root} on branch `experiments`")
     commit_hash = commit_to_experiments_branch(project_root)
 else:
     commit_hash = "test"
@@ -124,7 +126,7 @@ init_with_gnets = not args.init_with_gnets
 enable_gnets = args.disable_gnets if not init_with_gnets else False
 if init_with_gnets:
     logger.info(f"Initializing with G-Net weights: {args.load_gnets}")
-    assert args.load_gnets is not None, "Please enter a path to the weights for the G-Nets."
+    assert args.load_gnets is not None, "Please enter valid path for the G-Nets."
 experiment_name = args.name if enable_gnets else args.name
 
 
@@ -152,27 +154,54 @@ if rank == 0 and args.checkpoint:
 
 
 # Load and create datasets
-train_dataset = load_dataset("arrow", 
-                            data_dir=data_dir,
+train_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
                             cache_dir=cache_dir, 
-                            split="train",
-                            streaming=True)
+                            split="train[:95%]")
 
-val_dataset = load_dataset("arrow", 
-                            data_dir=data_dir,
+val_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
                             cache_dir=cache_dir, 
-                            split="validation",
-                            streaming=True)
+                            split="train[95%:96%]")
 val_dataset = val_dataset.take(experiment_config["val_dataset_len"]//world_size)
 
-test_dataset = load_dataset("arrow", 
-                            data_dir=data_dir, 
+test_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
                             cache_dir=cache_dir,
-                            split="test",
-                            streaming=True)
+                            split="train[95%:96%]")
 
-train_loader = get_dataloader(train_dataset, rank, world_size, BATCHSIZE, stateful=True)
+# Initialize the tokenizer
+tokenizer_path = os.path.join(base_config["tokenizer_dir"], "wikipedia_" + args.language)
+tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+print("Vocab size", tokenizer.vocab_size)
 
+
+def tokenize_function(element):
+    outputs = tokenizer(element["text"],
+                        truncation=True,
+                        max_length=SEQ_LEN+1,
+                        return_overflowing_tokens=True,
+                        return_length=True)
+    input_batch = []
+    for length, input_ids in zip(outputs["length"], outputs["input_ids"]):
+        if length == SEQ_LEN+1: # Drops all sentences that are not long enough...
+            input_batch.append(input_ids)
+    return {"input_ids": input_batch}
+
+rm_cols = train_dataset.column_names
+tokenized_train_dataset = train_dataset.map(tokenize_function, 
+                                            batched=True, 
+                                            num_proc=16,
+                                            remove_columns=rm_cols)
+
+tokenized_val_dataset = val_dataset.map(tokenize_function, 
+                                        batched=True, 
+                                        num_proc=16,
+                                        remove_columns=rm_cols)
+
+tokenized_test_dataset = test_dataset.map(tokenize_function, 
+                                        batched=True, 
+                                        num_proc=16,
+                                        remove_columns=rm_cols)
+
+train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, BATCHSIZE, stateful=True)
 
 # Initialize the model and optimizers
 model = GPT(**experiment_config["model"]).to(rank)
@@ -183,7 +212,10 @@ optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
 scheduler = None
 
 if args.scheduler:
-    scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
+    scheduler = optim.lr_scheduler.CyclicLR(optimizer, 1e-7, 2.5e-4, 
+                                            step_size_up=5000,
+                                            step_size_down=27000)
+    # scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
 
 
 # Dealing with custom model loading
@@ -261,7 +293,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     total_loss = 0
     start_time = time.time()
     
-    for data in train_loader:
+    for data in tqdm(train_loader):
         model.train()
         global global_step
         global_step += 1
@@ -270,7 +302,14 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
 
         if enable_gnets:
             gnets.zero_grad()
+            #with torch.no_grad():
+                #if rank == 1: print("before", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight[:768, :768].std())
             gnets.predict_weights(model) # implicitly updates the model weights!
+        # with torch.no_grad():
+        #     if rank == 1: 
+        #         print("after", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight.std())
+        #         #print("after", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight[:10, :10])
+      
     
         output = model(data[:, :SEQ_LEN-1], src_mask)
         loss = criterion(output.view(-1, VOCAB_SIZE), data[:, 1:SEQ_LEN].reshape(-1))
@@ -278,7 +317,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 0.25)
         if enable_gnets: gnets.backward()
-      
+        
         optimizer.step()
         if scheduler is not None: scheduler.step()
         if enable_gnets: gnets.step()
@@ -309,8 +348,12 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             val_loss = evaluate(model, val_loader)
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
             val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
+               
+            test_seq = predict_sequence("Star Trek",
+                                        tokenizer, model, rank)
             
             if rank == 0:
+                print(test_seq)
                 logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
                 writer.add_scalar("loss/val", val_loss, global_step=global_step)
                 writer.add_scalar("ppl/val", val_ppl, global_step=global_step)
@@ -355,11 +398,11 @@ def evaluate(model: nn.Module, eval_loader) -> torch.Tensor:
 
 
 # Compute initial validation loss
-val_loader = get_dataloader(val_dataset, rank, world_size, BATCHSIZE)
+val_loader = get_dataloader(tokenized_val_dataset, rank, world_size, BATCHSIZE)
 val_loss = evaluate(model, val_loader)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
 val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
-val_loader = get_dataloader(val_dataset, rank, world_size, BATCHSIZE)
+val_loader = get_dataloader(tokenized_val_dataset, rank, world_size, BATCHSIZE)
 
 
 # Initialize metrics logging on rank 0
