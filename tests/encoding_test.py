@@ -4,10 +4,7 @@ import torch
 
 from torchGB.utils import make_row_col_encoding, EncodingType
 
-
-
-
-########################
+## Alex legacy code which we use for compability tests #########################
 
 def set_encoding_type(dlist, idx, t) -> None:
     """
@@ -110,9 +107,6 @@ def old_make_row_col_encoding(types, dims, bits, extras = ()):
             
             if len(dlist.shape)==1:                             # expand dimensions (for 1 var output)
                 dlist = np.reshape(dlist, (dlist.shape[0],1))
-        if nptypes[i] == 4:                                     # Linear (non-binary) code
-            dlist = dlist #.squeeze()                           # remove singular dimensions 
-            
         if (nptypes[i] == 2)|(nptypes[i] == 3):                 # binary code
         
             max_bits = npbits[i]
@@ -130,12 +124,6 @@ def old_make_row_col_encoding(types, dims, bits, extras = ()):
             
             dlist = dlist[:,(max_bits-npbits[i]):(max_bits)]      # take only the lowest bits
             
-        if nptypes[i] == 5:                                     # random vectors
-            dlist = extras[i][dlist.squeeze(),:];               # add the vector of predefined random numbers
-            
-            if len(dlist.shape)==1:                             # expand dimensions (for 1 var output)
-                dlist = np.reshape(dlist, (dlist.shape[0],1))
-        
         expanded_tiled_vars.append(dlist)
         
     all_vars = expanded_tiled_vars[0]
@@ -160,8 +148,10 @@ def old_make_row_col_encoding(types, dims, bits, extras = ()):
     return row_col_encoding    
 
 
+
+
 class TestBinaryEncoding(unittest.TestCase):
-    def test_encoding(self):
+    def test_2d_dense_binary_encoding(self):
         encoding_types = (EncodingType.BINARY, EncodingType.BINARY)
         shape = (4, 4)
         
@@ -169,7 +159,37 @@ class TestBinaryEncoding(unittest.TestCase):
         num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
         
         encoding = make_row_col_encoding(shape, encoding_types, num_encoding_bits)
-        true_encoding = old_make_row_col_encoding((2, 2), (4, 4), num_encoding_bits)
+        true_encoding = old_make_row_col_encoding((2, 2), shape, num_encoding_bits)
+        print(encoding)
+        print(true_encoding)
+        self.assertTrue((true_encoding-encoding).sum() < 1e-7)
+        
+    def test_2d_dense_onehot_encoding(self):
+        encoding_types = (EncodingType.ONEHOT, EncodingType.ONEHOT)
+        shape = (4, 4)
+        
+        num_encoding_bits = np.ceil(np.log(shape)/np.log(2)).astype(np.uint16)
+        num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
+        
+        encoding = make_row_col_encoding(shape, encoding_types, num_encoding_bits)
+        true_encoding = old_make_row_col_encoding((1, 1), shape, num_encoding_bits)
+        print(encoding)
+        print(true_encoding)
+        self.assertTrue((true_encoding-encoding).sum() < 1e-7)
+        
+    def test_4d_conv_encoding(self):
+        encoding_types = (EncodingType.ONEHOT, 
+                        EncodingType.ONEHOT, 
+                        EncodingType.BINARY, 
+                        EncodingType.BINARY) 
+        shape = (3, 8, 5, 5)
+        
+        num_encoding_bits = np.ceil(np.log(shape)/np.log(2)).astype(np.uint16)
+        num_encoding_bits[:2] = shape[:2]
+        num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
+        
+        encoding = make_row_col_encoding(shape, encoding_types, num_encoding_bits)
+        true_encoding = old_make_row_col_encoding((1, 1, 2, 2), shape, num_encoding_bits)
         print(encoding)
         print(true_encoding)
         self.assertTrue((true_encoding-encoding).sum() < 1e-7)

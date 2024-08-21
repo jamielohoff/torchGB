@@ -170,7 +170,7 @@ test_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language,
 # Initialize the tokenizer
 tokenizer_path = os.path.join(base_config["tokenizer_dir"], "wikipedia_" + args.language)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-print("Vocab size", tokenizer.vocab_size)
+logger.debug(f"Vocab size: {tokenizer.vocab_size}")
 
 
 def tokenize_function(element):
@@ -201,6 +201,10 @@ tokenized_test_dataset = test_dataset.map(tokenize_function,
                                         num_proc=16,
                                         remove_columns=rm_cols)
 
+
+num_batches = len(tokenized_train_dataset)*EPOCHS//(BATCHSIZE*world_size) + 1
+logger.debug(f"# batches in train dataset {num_batches}")
+
 train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, BATCHSIZE, stateful=True)
 
 # Initialize the model and optimizers
@@ -212,10 +216,16 @@ optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
 scheduler = None
 
 if args.scheduler:
-    scheduler = optim.lr_scheduler.CyclicLR(optimizer, 1e-7, 2.5e-4, 
-                                            step_size_up=5000,
-                                            step_size_down=27000)
+    # scheduler = optim.lr_scheduler.CyclicLR(optimizer, 1e-7, 2.5e-4, 
+    #                                         step_size_up=5000,
+    #                                         step_size_down=50_000)
     # scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
+    scheduler = optim.lr_scheduler.OneCycleLR(optimizer,
+                                                max_lr=experiment_config["lr"], 
+                                                pct_start=0.1,
+                                                div_factor=25,
+                                                final_div_factor=100,
+                                                total_steps=num_batches)
 
 
 # Dealing with custom model loading
@@ -229,8 +239,12 @@ if args.load_model is not None:
         state_dict = torch.load(args.load_model, map_location=cpu_loc)
         SEED = state_dict["seed"]
         
-        train_dataset.shuffle(seed=SEED, buffer_size=10_000)
-        train_loader = get_dataloader(train_dataset, rank, world_size, BATCHSIZE, stateful=True)
+        tokenized_train_dataset.shuffle(seed=SEED)
+        train_loader = get_dataloader(tokenized_train_dataset, 
+                                        rank, 
+                                        world_size, 
+                                        BATCHSIZE, 
+                                        stateful=True)
         train_loader.load_state_dict(state_dict["dataloader"])
         
         logger.info(f"Loaded dataloader state from {args.load_model} "
@@ -257,7 +271,7 @@ experiment_config["gnets"]["ignore_layers"] += ignore_layers
 # Initialize the G-Nets if applicable
 gnets = None
 if enable_gnets or init_with_gnets:
-    gnets = GenomicBottleneck(model, **experiment_config["gnets"])
+    gnets = GenomicBottleneck(model, num_batches, **experiment_config["gnets"])
 
 
 # Load G-Net weights if applicable and predict the weights
@@ -302,15 +316,8 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
 
         if enable_gnets:
             gnets.zero_grad()
-            #with torch.no_grad():
-                #if rank == 1: print("before", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight[:768, :768].std())
             gnets.predict_weights(model) # implicitly updates the model weights!
-        # with torch.no_grad():
-        #     if rank == 1: 
-        #         print("after", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight.std())
-        #         #print("after", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight[:10, :10])
-      
-    
+
         output = model(data[:, :SEQ_LEN-1], src_mask)
         loss = criterion(output.view(-1, VOCAB_SIZE), data[:, 1:SEQ_LEN].reshape(-1))
 
@@ -338,6 +345,18 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                             f"loss {train_loss:5.2f} | ppl {ppl:8.2f}")
                 writer.add_scalar("loss/train", train_loss, global_step=global_step)
                 writer.add_scalar("ppl/train", ppl, global_step=global_step)
+                
+                for i in range(6):
+                    print("in_proj_weight", model.module.transformer_encoder.layers[i].self_attn.in_proj_weight.std())
+                    print("in_proj_bias", model.module.transformer_encoder.layers[i].self_attn.in_proj_bias.std())
+                    print("out_proj weight", model.module.transformer_encoder.layers[i].self_attn.out_proj.weight.std())
+                    print("out_proj bias", model.module.transformer_encoder.layers[i].self_attn.out_proj.weight.std())
+                    
+                    print("linear1 weight", model.module.transformer_encoder.layers[i].linear1.weight.std())
+                    print("linear1 bias", model.module.transformer_encoder.layers[i].linear1.bias.std())
+                    print("linear2 weight", model.module.transformer_encoder.layers[i].linear2.weight.std())
+                    print("linear2 bias", model.module.transformer_encoder.layers[i].linear2.bias.std())
+                    # print("after", model.module.transformer_encoder.layers[0].self_attn.in_proj_weight[:10, :10])
             dist.barrier()
             
             total_loss = 0
@@ -349,8 +368,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
             val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
                
-            test_seq = predict_sequence("Star Trek",
-                                        tokenizer, model, rank)
+            test_seq = predict_sequence("Star Trek", tokenizer, model, rank)
             
             if rank == 0:
                 print(test_seq)
@@ -439,16 +457,15 @@ for epoch in range(EPOCHS):
     dist.barrier()
     train(model, gnets)
     SEED += 1
-    train_dataset = train_dataset.shuffle(seed=SEED, buffer_size=10_000)
-    val_dataset = val_dataset.shuffle(seed=SEED, buffer_size=10_000)
-    train_loader = get_dataloader(train_dataset, rank, world_size, BATCHSIZE, stateful=True)
-    val_loader = get_dataloader(val_dataset, rank, world_size, BATCHSIZE)
-    writer.flush()
+    tokenized_train_dataset = tokenized_train_dataset.shuffle(seed=SEED)
+    tokenized_val_dataset = tokenized_val_dataset.shuffle(seed=SEED)
+    train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, BATCHSIZE, stateful=True)
+    val_loader = get_dataloader(tokenized_val_dataset, rank, world_size, BATCHSIZE)
 
 
 # Evaluate the best model on the test dataset
-test_dataset = test_dataset.shuffle(seed=SEED, buffer_size=10_000)
-test_loader = get_dataloader(test_dataset, rank, world_size, 4*BATCHSIZE)
+tokenized_test_dataset = tokenized_test_dataset.shuffle(seed=SEED)
+test_loader = get_dataloader(tokenized_test_dataset, rank, world_size, 4*BATCHSIZE)
 model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["model"])
 
 test_loss = evaluate(model.to(rank), test_loader) 

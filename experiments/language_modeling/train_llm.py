@@ -183,7 +183,10 @@ optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
 scheduler = None
 
 if args.scheduler:
-    scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
+    # scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
+    scheduler = optim.lr_scheduler.CyclicLR(optimizer, 1e-7, 2.5e-4, 
+                                            step_size_up=5000,
+                                            step_size_down=27000)
 
 
 # Dealing with custom model loading

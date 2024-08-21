@@ -84,14 +84,14 @@ class GPT(nn.Module):
                                                 batch_first=True, 
                                                 activation=F.gelu)
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers)
-        self.encoder = nn.Embedding(vocab_size, embedding_dim)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.embedding_dim = torch.tensor([embedding_dim])
         self.layer_norm = nn.LayerNorm(embedding_dim)
         self.decoder = nn.Linear(embedding_dim, vocab_size, bias=False)
         
         self.apply(self.init_weights)
         if tie_weights:
-            self.decoder.weight = self.encoder.weight # Tie weights
+            self.decoder.weight = self.embedding.weight # Tie weights
         
     def init_weights(self, module: nn.Module) -> None:
         # GPT-2 init as described in paper
@@ -101,22 +101,22 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Linear):
             nn.init.normal_(module.weight, std=0.02)
             if module.bias is not None:
-                nn.init.zeros_(module.bias)
+                nn.init.normal_(module.bias, std=0.02) # nn.init.zeros_(module.bias)
             
         elif isinstance(module, nn.TransformerEncoderLayer):
             nn.init.normal_(module.self_attn.in_proj_weight, std=0.02)
             if module.self_attn.in_proj_bias is not None:
-                nn.init.zeros_(module.self_attn.in_proj_bias)
+                nn.init.normal_(module.self_attn.in_proj_bias, std=0.02) # nn.init.zeros_(module.self_attn.in_proj_bias)
             nn.init.normal_(module.self_attn.out_proj.weight, std=0.02)
             if module.self_attn.out_proj.bias is not None:
-                nn.init.zeros_(module.self_attn.out_proj.bias)
+                nn.init.normal_(module.self_attn.out_proj.bias, std=0.02) # nn.init.zeros_(module.self_attn.out_proj.bias)
             
             nn.init.normal_(module.linear1.weight, std=0.02)
             if module.linear1.bias is not None:
-                nn.init.zeros_(module.linear1.bias)
+                nn.init.normal_(module.linear1.bias, std=0.02) # nn.init.zeros_(module.linear1.bias)
             nn.init.normal_(module.linear2.weight, std=0.02)
             if module.linear2.bias is not None:
-                nn.init.zeros_(module.linear2.bias)
+                nn.init.normal_(module.linear2.bias, std=0.02) # nn.init.zeros_(module.linear2.bias)
 
         
     def forward(self, src: Tensor, src_mask: Tensor) -> Tensor:
@@ -127,7 +127,7 @@ class GPT(nn.Module):
         Returns:
             output Tensor of shape [seq_len, batch_size, ntoken]
         """
-        src = self.encoder(src) * torch.sqrt(self.embedding_dim).to(src.device)
+        src = self.embedding(src) * torch.sqrt(self.embedding_dim).to(src.device)
         src = self.pos_encoder(src)
         src = self.transformer_encoder(src, src_mask)
         src = self.layer_norm(src)

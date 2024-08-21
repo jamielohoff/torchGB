@@ -60,6 +60,29 @@ def assemble_matrix(arr: Tensor, arr_shape: Tuple[int, int]) -> Tensor:
     return out
 
 
+def assemble_4d_kernel(arr: Tensor, arr_shape: Tuple[int, int, int, int]) -> Tensor:
+    """
+    NOTE This is the inverse of tile_matrix. This function reassembles the 
+    original array from its tiled form. The input array must be 3D.
+    
+    Args:
+        `arr` (torch.Tensor): The input array in its tiled form.
+        `arr_shape` (Tuple[int, int]): The shape of the reassembled array.
+        
+    Returns:
+        torch.Tensor: The reassembled array.
+    """
+    h, w, x, y = arr_shape
+    row_size, col_size = arr.shape[1:3]
+    # assert len(arr.shape) == 3, "Input array must be 3D"
+    # assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
+    # assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
+    out = (arr.reshape(h // row_size, -1, row_size, col_size, x, y)
+                .swapaxes(1, 2)
+                .reshape(h, w, x, y))
+    return out
+
+
 def cut_matrix(arr: Tensor, true_shape: Sequence[int]) -> Tensor:
     """
     This function cuts the padded matrix to its true shape.
@@ -71,12 +94,12 @@ def cut_matrix(arr: Tensor, true_shape: Sequence[int]) -> Tensor:
     Returns:
         torch.Tensor: The cut array.
     """
-    h, w = true_shape
+    h, w = true_shape[0:2]
     return arr[:h, :w]
     
     
 def get_tile_size(param_shape: Tuple[int, int], 
-                max_gnet_batch: int) -> Tuple[int, int, int, int]:
+                    max_gnet_batch: int) -> Tuple[int, int, int, int]:
     """
     This function calculates the number of row and column tiles for a given
     weight matrix shape and maximum parameter count per tile. The number of row 
@@ -145,8 +168,8 @@ def make_row_col_encoding(param_shape: Sequence[int],
 
         if encoding_types[i].value == 0:
             max_hot = dim_encoding.max() + 1
-            one_hot_encoding = np.zeros((param_shape[i], max_hot), dtype=np.int16)
-            one_hot_encoding[np.arange(param_shape[i]), dim_encoding.squeeze()] = 1
+            one_hot_encoding = np.identity(max_hot, dtype=np.int16)
+            dim_encoding = one_hot_encoding[dim_encoding.squeeze(), :]
             
         # TODO this can be optimized further
         elif encoding_types[i].value == 1: # Binary code
