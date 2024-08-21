@@ -51,10 +51,10 @@ def conv2d_gnet_layer(param: Tensor,
     num_encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype(np.uint16)
     num_encoding_bits[:2] = param_shape[:2]
     num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
-    encoding_type = (EncodingType.ONEHOT, 
-                    EncodingType.ONEHOT, 
+    encoding_type = (EncodingType.BINARY, 
                     EncodingType.BINARY, 
-                    EncodingType.BINARY)   
+                    EncodingType.ONEHOT, 
+                    EncodingType.ONEHOT)   
 
     tile_size = np.ceil(np.sqrt(max_gnet_batch//(param_shape[2]*param_shape[3]))).astype(np.int32)
     num_row_tiles = np.ceil(param_shape[0] / tile_size).astype(np.int32)
