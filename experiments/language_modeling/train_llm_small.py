@@ -296,7 +296,7 @@ if init_with_gnets:
 
 # Calculate model num_params and compression factor if applicable
 num_params = sum(p.numel() for p in model.parameters())
-compression_factor = gnets.compression(model) if enable_gnets else 1.0
+compression_factor = gnets.compression() if enable_gnets else 1.0
 
 
 # Other stuff that is required

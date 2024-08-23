@@ -188,33 +188,27 @@ class GenomicBottleneck(nn.Module):
         dist.all_reduce(num_params, op=dist.ReduceOp.SUM)
         return num_params.item()
     
-    def get_num_params_no_gnet(self, model: nn.Module) -> int:
+    def get_num_params_no_gnet(self) -> int:
         """
         Because gnets are now stored decentralized across devices, we need to
         compute them separately and then sum them up with a all_reduce operation.
         
-        Args:
-            `model` (nn.Module): The neural network model.
-        
         Returns:
             int: Cumulative number of parameters of which have no G-Nets attached.
         """
-        return sum([param.numel() for pname, param in model.named_parameters()
+        return sum([param.numel() for pname, param in self.model.named_parameters()
                     if not pname in self.gnetdict.keys()])
     
-    def compression(self, model: nn.Module) -> float:
+    def compression(self) -> float:
         """
         This function computes the compression ratio of the G-Net to the model.
-        
-        Args:
-            `model` (nn.Module): The neural network model.
 
         Returns:
             float: Compression factor of the G-Net with respect to the model.
         """
-        num_model_params = sum(p.numel() for p in model.parameters())
+        num_model_params = sum(p.numel() for p in self.model.parameters())
         num_gnet_params = self.get_num_params_gnet() 
-        num_gnet_params += self.get_num_params_no_gnet(model)
+        num_gnet_params += self.get_num_params_no_gnet()
         
         compression = num_model_params / num_gnet_params
         return compression
@@ -345,9 +339,6 @@ class GenomicBottleneck(nn.Module):
         This function takes the models gradients after a forward and 
         backward pass through the model and propagates them through the Gnet to
         update the parameters.
-
-        Args:
-            `model` (nn.Module): The neural network model.
         """              
         for name, mod in self.model.module.named_children(): 
             for pname, param in mod.named_parameters():  
@@ -361,7 +352,8 @@ class GenomicBottleneck(nn.Module):
     def step(self) -> None:
         for name in self.gnetdict.keys():
             if self.gnetdict[name].rank == dist.get_rank():
-                for optimizer, scheduler in zip(self.gnetdict[name].optimizers, self.gnetdict[name].schedulers):
+                for optimizer, scheduler in zip(self.gnetdict[name].optimizers, 
+                                                self.gnetdict[name].schedulers):
                     optimizer.step()
                     scheduler.step()
                     
