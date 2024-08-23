@@ -28,6 +28,8 @@ class GNetLayer:
     Args:
         `name` (str): Name of the layer parameter predicted by the G-Net.
         `rank` (int): Rank of the device where the G-Net is stored.
+        `tile_shape` (Optional[Sequence[int, int]]): The shape of the tiles used 
+            to predict the weights of the layer.
         `gnets` (Sequence[GenomicBottleNet]): Sequence of G-Net models. 
             This is typically a list of MLPs.
         `optimizers` (Sequence[optim.Optimizer]): The optimizers used to train 
@@ -41,7 +43,7 @@ class GNetLayer:
     """
     name: str
     rank: int
-    tile_shape: Optional[Tuple[int, int]] = None
+    tile_shape: Optional[Sequence[int]] = None
     gnets: Optional[Sequence[GenomicBottleNet]] = None
     optimizers: Optional[Sequence[optim.Optimizer]] = None
     schedulers: Optional[optim.lr_scheduler.LRScheduler] = None
@@ -377,9 +379,9 @@ class GenomicBottleneck(nn.Module):
         
         schedulers = [optim.lr_scheduler.OneCycleLR(optimizer,
                                                     max_lr=_lr, 
-                                                    pct_start=0.1,
-                                                    div_factor=25,
-                                                    final_div_factor=100,
+                                                    pct_start=0.2,
+                                                    div_factor=250,
+                                                    final_div_factor=1000,
                                                     total_steps=self.num_batches)
                         for optimizer in optimizers]
         
@@ -395,8 +397,8 @@ class GenomicBottleneck(nn.Module):
                                         grad_scale=grad_scale)
         
         print(f"Creating G-Net for layer: {name}\n"
-                        f"Layer size: {np.array(param.shape)}\n"
-                        f"Device ID: {device_id}\n"
-                        f"Number of g-nets: {len(gnets)}\n"
-                        f"Learning rate: {_lr}")
+                f"Layer size: {np.array(param.shape)}\n"
+                f"Device ID: {device_id}\n"
+                f"Number of g-nets: {len(gnets)}\n"
+                f"Learning rate: {_lr}")
 

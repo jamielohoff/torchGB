@@ -16,11 +16,12 @@ class GenomicBottleNet(nn.Module):
 
     Args:
         `layers` (nn.ModuleList): ModuleList that contains all differentiable
-                                layers of the G-Net.
+            layers of the G-Net.
+        `sizes` (Sequence[int]): List of sizes for the G-Net layers.
         `output_scale` (float): Scaling factor for the output of the G-Net.
 
     Returns:
-        float: Prediction of the new weight.
+        Tensor: Prediction of the new weight.
     """
     layers: nn.ModuleList
     sizes: Sequence[int]
@@ -36,17 +37,27 @@ class GenomicBottleNet(nn.Module):
         length = len(sizes) - 1
         self.layers = nn.ModuleList([nn.Linear(sizes[i], sizes[i+1]) 
                                     for i in range(length)])
+        self.apply(self.init_weights)
 
     def forward(self, x: Tensor) -> Tensor:
         for layer in self.layers[:-1]:
             x = F.relu(layer(x))
         x = self.layers[-1](x) # no non-linearity on the last layer
-        return x * self.output_scale
+        return x # * self.output_scale
+    
+    def init_weights(self, module: nn.Module) -> None:
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, std=1.25*0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias) # nn.init.normal_(module.bias, std=0.02) # 
+                
+
+GNetLayerTuple = Tuple[Tensor, Sequence[GenomicBottleNet], Sequence[int], float]
 
 
 def conv2d_gnet_layer(param: Tensor, 
                     hidden_dim: int, 
-                    max_gnet_batch: int) -> Tuple[Tensor, GenomicBottleNet, Tuple[int, int]]:
+                    max_gnet_batch: int) -> GNetLayerTuple:
     param_shape = param.data.shape          
     num_encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype(np.uint16)
     num_encoding_bits[:2] = param_shape[:2]
@@ -79,7 +90,7 @@ def conv2d_gnet_layer(param: Tensor,
 
 def default_gnet_layer(param: Tensor, 
                         hidden_dim: int, 
-                        max_gnet_batch: int) -> Tuple[Tensor, GenomicBottleNet, Tuple[int, int]]:
+                        max_gnet_batch: int) -> GNetLayerTuple:
     param_shape = param.data.shape
     num_row_tiles, num_col_tiles, row_tile_size, col_tile_size = get_tile_size(param_shape, 
                                                                                 max_gnet_batch)
@@ -100,7 +111,7 @@ def default_gnet_layer(param: Tensor,
     with torch.no_grad():
         output_scale = torch.std(param.data)    
 
-    gnet_sizes = (num_inputs, hidden_dim, hidden_dim//2,  1)
+    gnet_sizes = (num_inputs, hidden_dim, 1)
     gnets = [GenomicBottleNet(gnet_sizes, output_scale) 
             for _ in range(num_row_tiles*num_col_tiles)]     
     
@@ -109,10 +120,7 @@ def default_gnet_layer(param: Tensor,
 
 def square_default_gnet_layer(param: Tensor, 
                             hidden_dim: int,  
-                            max_gnet_batch: int) -> Tuple[Tensor, GenomicBottleNet, Tuple[int, int]]:
-    # num_row_tiles, num_col_tiles, row_tile_size, col_tile_size = get_tile_size(param_shape, 
-    #                                                                             max_gnet_batch)
-    
+                            max_gnet_batch: int) -> GNetLayerTuple:
     param_shape = param.data.shape
     # Calculates the number of square tiles of size `max_gnet_batch` we need to
     # completely cover the weight matrix
@@ -145,7 +153,7 @@ def square_default_gnet_layer(param: Tensor,
 
 def qkv_gnet_layer(param: Tensor, 
                     hidden_dim: int, 
-                    max_gnet_batch: int) -> Tuple[Tensor, GenomicBottleNet, Tuple[int, int]]:
+                    max_gnet_batch: int) -> GNetLayerTuple:
     # Subdivide the attention weight matrix in three similar parts Wq, Wk, Wv
     param_shape = param.data.shape
     _param_shape = (param_shape[0] // 3, param_shape[1])
@@ -169,7 +177,7 @@ def qkv_gnet_layer(param: Tensor,
     with torch.no_grad():
         output_scale = torch.std(param.data)  
  
-    gnet_sizes = (num_inputs, hidden_dim, hidden_dim//2, 1)
+    gnet_sizes = (num_inputs, hidden_dim, 1)
     gnets = [GenomicBottleNet(gnet_sizes, output_scale) 
             for _ in range(3*num_row_tiles*num_col_tiles)]       
     
@@ -178,7 +186,7 @@ def qkv_gnet_layer(param: Tensor,
 
 def square_qkv_gnet_layer(param: Tensor, 
                     hidden_dim: int, 
-                    max_gnet_batch: int) -> Tuple[Tensor, GenomicBottleNet, Tuple[int, int]]:
+                    max_gnet_batch: int) -> GNetLayerTuple:
     # Subdivide the attention weight matrix in three similar parts Wq, Wk, Wv
     param_shape = param.data.shape
     _param_shape = (param_shape[0] // 3, param_shape[1])
@@ -214,7 +222,7 @@ def square_qkv_gnet_layer(param: Tensor,
 
 def onedim_gnet_layer(param: Tensor, 
                         hidden_dim: int, 
-                        max_gnet_batch: int) -> Tuple[Tensor, GenomicBottleNet, Tuple[int, int]]:
+                        max_gnet_batch: int) -> GNetLayerTuple:
     param_shape = param.data.shape
     
     num_encoding_bits = np.ceil(np.log(param_shape)/np.log(2)).astype(np.uint16)

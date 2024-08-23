@@ -64,6 +64,7 @@ slicing_config.yml
 *.zst
 **/wandb/
 **/wandb_jureca/
+**/hist/
 **/plots/
 *.pt
 *.pth
