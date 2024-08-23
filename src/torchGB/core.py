@@ -10,13 +10,14 @@ import torch.optim as optim
 import torch.distributed as dist
 from torch import Tensor
 
+from torch.optim.lr_scheduler import OneCycleLR
+
 from .utils import assemble_matrix, cut_matrix, assemble_4d_kernel
 from .gnet import (GenomicBottleNet, 
-                    conv2d_gnet_layer,
-                    default_gnet_layer, 
-                    qkv_gnet_layer, 
+                    square_conv2d_gnet_layer,
                     square_default_gnet_layer, 
-                    square_qkv_gnet_layer)
+                    square_qkv_gnet_layer,
+                    onedim_gnet_layer)
 from .lamb import Lamb
 
 
@@ -109,9 +110,9 @@ class GenomicBottleneck(nn.Module):
                             print(pname)
                             if "weight" in pname:
                                 print("asdf")
-                                out = conv2d_gnet_layer(param, 
-                                                        hidden_dim,
-                                                        max_gnet_batchsize)   
+                                out = square_conv2d_gnet_layer(param, 
+                                                                hidden_dim,
+                                                                max_gnet_batchsize)   
                                 # TODO reintegrate this
                                 # Add layer to the dict                                                          
                                 # pname_cut = pname.split("weight")[0] # that's a sloppy way to do that
@@ -137,6 +138,11 @@ class GenomicBottleneck(nn.Module):
                                                                 hidden_dim,
                                                                 max_gnet_batchsize) 
                                 self._add_gnets(_name, device_id, param, *out)
+                            elif "bias" is pname:
+                                out = onedim_gnet_layer(param, 
+                                                        hidden_dim,
+                                                        max_gnet_batchsize)
+                                self._add_gnets(_name, device_id, param, *out)
                                         
                         elif isinstance(mod, nn.Linear):     
                             if "weight" in pname:                   
@@ -144,6 +150,11 @@ class GenomicBottleneck(nn.Module):
                                 out = square_default_gnet_layer(param, 
                                                                 hidden_dim,
                                                                 max_gnet_batchsize)
+                                self._add_gnets(_name, device_id, param, *out)
+                            else:
+                                out = onedim_gnet_layer(param, 
+                                                        hidden_dim,
+                                                        max_gnet_batchsize)
                                 self._add_gnets(_name, device_id, param, *out)
                     else:
                         self.gnetdict[_name] = GNetLayer(name=_name, rank=device_id)
@@ -364,12 +375,19 @@ class GenomicBottleneck(nn.Module):
                     output_scale: float,
                     grad_scale: float = 1.) -> None:
         """
-        This function adds a G-Net to the G-Net dictionary.
+        This function adds a set of G-Nets to the G-Net dictionary.
 
         Args:
             `name` (str): Name of the layer parameter predicted by the G-Net.
-            `gnet` (GenomicBottleNet): The G-Net model.
-            `optimizer` (optim.Optimizer): The optimizer used to train the G-Net.
+            `device_id` (int): Rank of the device where the G-Net is stored.
+            `param` (torch.Tensor): The parameter tensor of the layer.
+            `row_col_encodings` (torch.Tensor): The row and column encodings of the
+                parameter matrix.
+            `gnets` (Sequence[GenomicBottleNet]): The G-Net model.
+            `tile_shape` (Tuple[int, int]): The shape of the tiles used to predict
+                the weights of the layer.
+            `output_scale` (float): The scaling factor for the output of the G-Net.
+            `grad_scale` (float): The scaling factor for the gradients.
         """
         gnets = [gnet.to(device_id) for gnet in gnets]
         row_col_encodings = row_col_encodings.to(device_id)
@@ -377,13 +395,14 @@ class GenomicBottleneck(nn.Module):
         _lr = self.lr / np.sqrt(output_scale.item()*num_layers)
         optimizers = [Lamb(gnet.parameters(), lr=_lr) for gnet in gnets]
         
-        schedulers = [optim.lr_scheduler.OneCycleLR(optimizer,
-                                                    max_lr=_lr, 
-                                                    pct_start=0.2,
-                                                    div_factor=250,
-                                                    final_div_factor=1000,
-                                                    total_steps=self.num_batches)
-                        for optimizer in optimizers]
+        scheduler = lambda optim: OneCycleLR(optim,
+                                            max_lr=_lr, 
+                                            pct_start=0.2,
+                                            div_factor=250,
+                                            final_div_factor=1000,
+                                            total_steps=self.num_batches)
+        
+        schedulers = [scheduler(optimizer) for optimizer in optimizers]
         
         grad_scale = torch.tensor(grad_scale).to(device_id)        
         self.gnetdict[name] = GNetLayer(name=name,
@@ -397,7 +416,7 @@ class GenomicBottleneck(nn.Module):
                                         grad_scale=grad_scale)
         
         print(f"Creating G-Net for layer: {name}\n"
-                f"Layer size: {np.array(param.shape)}\n"
+                f"Layer size: {param.shape}\n"
                 f"Device ID: {device_id}\n"
                 f"Number of g-nets: {len(gnets)}\n"
                 f"Learning rate: {_lr}")
