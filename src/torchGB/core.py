@@ -17,7 +17,8 @@ from .gnet import (GenomicBottleNet,
                     square_conv2d_gnet_layer,
                     square_default_gnet_layer, 
                     square_qkv_gnet_layer,
-                    onedim_gnet_layer)
+                    onedim_gnet_layer,
+                    ceil)
 from .lamb import Lamb
 
 
@@ -73,7 +74,6 @@ class GenomicBottleneck(nn.Module):
         `max_gnet_batchsize` (int): The maximum number of parameters per tile.
         `ignore_layers` (Optional[Sequence[str]]): A list of layer names and 
             types that should not be predicted using a G-Net.
-
     """
     lr: float
     num_batches: int
@@ -107,9 +107,7 @@ class GenomicBottleneck(nn.Module):
                     
                     if device_id == dist.get_rank():
                         if isinstance(mod, nn.Conv2d):
-                            print(pname)
                             if "weight" in pname:
-                                print("asdf")
                                 out = square_conv2d_gnet_layer(param, 
                                                                 hidden_dim,
                                                                 max_gnet_batchsize)   
@@ -133,12 +131,12 @@ class GenomicBottleneck(nn.Module):
                                                             max_gnet_batchsize) 
 
                                 self._add_gnets(_name, device_id, param, *out)
-                            elif "weight" in pname and len(param.data.shape) == 2:
+                            elif "weight" in pname and len(param.shape) == 2:
                                 out = square_default_gnet_layer(param, 
                                                                 hidden_dim,
                                                                 max_gnet_batchsize) 
                                 self._add_gnets(_name, device_id, param, *out)
-                            elif "bias" is pname:
+                            elif "bias" in pname:
                                 out = onedim_gnet_layer(param, 
                                                         hidden_dim,
                                                         max_gnet_batchsize)
@@ -262,7 +260,9 @@ class GenomicBottleneck(nn.Module):
                 optimizer_name = "optimizer_" + entry_name    
                 d = self.gnetdict[name]
                 
-                for gnet, opt, gnet_params, opt_state in zip(d.gnets, d.optimizers, checkpoint[model_name], checkpoint[optimizer_name]):
+                for gnet, opt, gnet_params, opt_state in zip(d.gnets, d.optimizers, 
+                                                            checkpoint[model_name],
+                                                            checkpoint[optimizer_name]):
                     gnet.load_state_dict(gnet_params)
                     opt.load_state_dict(opt_state) 
 
@@ -278,17 +278,14 @@ class GenomicBottleneck(nn.Module):
                 for gnet in self.gnetdict[name].gnets:
                     gnet.zero_grad()
         
-    def predict_weights(self, model: nn.Module) -> None:
+    def predict_weights(self) -> None:
         """
         This function generates the new weights using the gnets, reshapes them
         to the original shape and sets the models parameters to the corresponding
         new weights.
-
-        Args:
-            `model` (nn.Module): The neural network model in question.
         """
         param_list = {i:[] for i in range(dist.get_world_size())}
-        for name, mod in model.module.named_children(): 
+        for name, mod in self.model.module.named_children(): 
             for pname, param in mod.named_parameters():    
                 _name = name + "." + pname 
                 if _name in self.gnetdict.keys():
@@ -299,32 +296,42 @@ class GenomicBottleneck(nn.Module):
                             gnet_input = self.gnetdict[_name].gnet_input
                             new_weight_tile = gnet(gnet_input)
                             new_weight_tile = new_weight_tile.reshape(tile_shape)
+                            new_weight_tile -= new_weight_tile.mean()
                             new_weights.append(new_weight_tile)
                             
                         # TODO make this prettier
                         # Assemble the new weight tiles into the full weight matrix
                         new_weights = torch.stack(new_weights, dim=0)
                         
-                        if "in_proj_weight" in _name:
-                            num_row_tiles = 3*np.ceil(param.data.shape[0]//3 / tile_shape[0]).astype(np.int32)
-                            num_col_tiles = np.ceil(param.data.shape[1] / tile_shape[1]).astype(np.int32)
+                        if "in_proj_weight_x" in _name:
+                            num_row_tiles = 3*ceil(param.shape[0]//3/tile_shape[0])
+                            num_col_tiles = ceil(param.shape[1]/tile_shape[1])
+                        elif "bias" in _name:
+                            num_col_tiles = num_row_tiles = 1
                         else:
-                            num_row_tiles = np.ceil(param.data.shape[0] / tile_shape[0]).astype(np.int32)
-                            num_col_tiles = np.ceil(param.data.shape[1] / tile_shape[1]).astype(np.int32)
+                            num_row_tiles = ceil(param.shape[0]/tile_shape[0])
+                            num_col_tiles = ceil(param.shape[1]/tile_shape[1])
                         
                         if isinstance(mod, nn.Conv2d):
-                            _shape = (num_row_tiles*tile_shape[0], num_col_tiles*tile_shape[1], param.data.shape[2], param.data.shape[3])
-                            new_weights = assemble_4d_kernel(new_weights, _shape)
-                            new_weights = cut_matrix(new_weights, param.data.shape)
+                            shape = (num_row_tiles*tile_shape[0], 
+                                        num_col_tiles*tile_shape[1], 
+                                        param.shape[2], 
+                                        param.shape[3])
+                            new_weights = assemble_4d_kernel(new_weights, shape)
+                            new_weights = cut_matrix(new_weights, param.shape)
+                        elif "bias" in _name:
+                            new_weights = new_weights.squeeze()
                         else:
-                            _shape = (num_row_tiles*tile_shape[0], num_col_tiles*tile_shape[1])
-                            new_weights = assemble_matrix(new_weights, _shape)
-                            new_weights = cut_matrix(new_weights, param.data.shape)
+                            shape = (num_row_tiles*tile_shape[0], 
+                                    num_col_tiles*tile_shape[1])
+                            new_weights = assemble_matrix(new_weights, shape)
+                            new_weights = cut_matrix(new_weights, param.shape)
                             
-                        new_weights = new_weights.contiguous() # when cutting the matrix, it's not contiguous anymore
+                        # When cutting the matrix, it's not contiguous anymore
+                        new_weights = new_weights.contiguous() 
                         self.gnetdict[_name].weights = new_weights
                         
-                        # Sets the models parameters to the corresponding new weights
+                        # Sets the parameters to the corresponding new weights
                         param.data = nn.Parameter(new_weights)
                     param_list[self.gnetdict[_name].rank].append(param.data)
                 
@@ -337,12 +344,12 @@ class GenomicBottleneck(nn.Module):
     def backward(self) -> None:
         """
         This function takes the models gradients after a forward and 
-        backward pass through the model and propagates them through the Gnet to
+        backward pass through the model and propagates them through the G-Net to
         update the parameters.
         """              
         for name, mod in self.model.module.named_children(): 
             for pname, param in mod.named_parameters():  
-                _name = name + "." + pname  
+                _name = name + "." + pname 
                 if _name in self.gnetdict.keys():
                     if self.gnetdict[_name].rank == dist.get_rank():
                         grad_scale = self.gnetdict[_name].grad_scale
@@ -365,27 +372,29 @@ class GenomicBottleneck(nn.Module):
                     gnets: GenomicBottleNet, 
                     tile_shape: Tuple[int, int],
                     output_scale: float,
-                    grad_scale: float = 1.) -> None:
+                    grad_scale: Optional[float] = 1.) -> None:
         """
         This function adds a set of G-Nets to the G-Net dictionary.
 
         Args:
             `name` (str): Name of the layer parameter predicted by the G-Net.
             `device_id` (int): Rank of the device where the G-Net is stored.
-            `param` (torch.Tensor): The parameter tensor of the layer.
-            `row_col_encodings` (torch.Tensor): The row and column encodings of the
-                parameter matrix.
+            `param` (Tensor): The parameter tensor of the layer.
+            `row_col_encodings` (torch.Tensor): The row and column encodings of 
+                the parameter matrix.
             `gnets` (Sequence[GenomicBottleNet]): The G-Net model.
-            `tile_shape` (Tuple[int, int]): The shape of the tiles used to predict
-                the weights of the layer.
+            `tile_shape` (Tuple[int, int]): The shape of the tiles used to 
+                predict the weights of the layer.
             `output_scale` (float): The scaling factor for the output of the G-Net.
             `grad_scale` (float): The scaling factor for the gradients.
         """
         gnets = [gnet.to(device_id) for gnet in gnets]
         row_col_encodings = row_col_encodings.to(device_id)
+        
         num_layers = len(gnets[0].sizes)
         _lr = self.lr / np.sqrt(output_scale.item()*num_layers)
-        optimizers = [Lamb(gnet.parameters(), lr=_lr) for gnet in gnets]
+        optimizer = lambda params: Lamb(params, lr=_lr, weight_decay=1e-5)
+        optimizers = [optimizer(gnet.parameters()) for gnet in gnets]
         
         scheduler = lambda optim: OneCycleLR(optim,
                                             max_lr=_lr, 
@@ -394,7 +403,7 @@ class GenomicBottleneck(nn.Module):
                                             final_div_factor=1000,
                                             total_steps=self.num_batches)
         
-        schedulers = [scheduler(optimizer) for optimizer in optimizers]
+        schedulers = [scheduler(optim) for optim in optimizers]
         
         grad_scale = torch.tensor(grad_scale).to(device_id)        
         self.gnetdict[name] = GNetLayer(name=name,

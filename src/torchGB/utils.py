@@ -12,7 +12,7 @@ class EncodingType(Enum):
     BINARY = 1 # Binary code
 
 
-def tile_matrix(arr: Tensor, row_size: int, col_size: int):
+def tile_matrix(matrix: Tensor, row_size: int, col_size: int):
     """
     Return an array of shape (n, row_size, col_size) where
     n * row_size * col_size = arr.size
@@ -21,35 +21,35 @@ def tile_matrix(arr: Tensor, row_size: int, col_size: int):
     each subblock preserving the "physical" layout of arr.
     
     Args:
-        `arr` (torch.Tensor): The input array to be tiled. Has to be two-dimensional.
+        `matrix` (Tensor): The input array to be tiled. Has to be two-dimensional.
         `row_size` (int): The number of rows in each subtile.
         `col_size` (int): The number of columns in each subtile.
         
     Returns:
-        torch.Tensor: The tiled array.
+        Tensor: The tiled array.
     """
-    h, w = arr.shape
-    assert len(arr.shape) == 2, "Input array must be 3D"
+    h, w = matrix.shape
+    assert len(matrix.shape) == 2, "Input array must be 3D"
     assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
     assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
-    return (arr.reshape(h // row_size, row_size, -1, col_size)
-               .swapaxes(1, 2)
-               .reshape(-1, row_size, col_size))
+    return (matrix.reshape(h // row_size, row_size, -1, col_size)
+                    .swapaxes(1, 2)
+                    .reshape(-1, row_size, col_size))
     
 
-def assemble_matrix(arr: Tensor, arr_shape: Tuple[int, int]) -> Tensor:
+def assemble_matrix(arr: Tensor, new_shape: Tuple[int, int]) -> Tensor:
     """
     NOTE This is the inverse of tile_matrix. This function reassembles the 
     original array from its tiled form. The input array must be 3D.
     
     Args:
-        `arr` (torch.Tensor): The input array in its tiled form.
-        `arr_shape` (Tuple[int, int]): The shape of the reassembled array.
+        `arr` (Tensor): The input array in its tiled form.
+        `new_shape` (Tuple[int, int]): The shape of the reassembled array.
         
     Returns:
-        torch.Tensor: The reassembled array.
+        Tensor: The reassembled matrix.
     """
-    h, w = arr_shape
+    h, w = new_shape
     row_size, col_size = arr.shape[1:]
     assert len(arr.shape) == 3, "Input array must be 3D"
     assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
@@ -60,19 +60,19 @@ def assemble_matrix(arr: Tensor, arr_shape: Tuple[int, int]) -> Tensor:
     return out
 
 
-def assemble_4d_kernel(arr: Tensor, arr_shape: Tuple[int, int, int, int]) -> Tensor:
+def assemble_4d_kernel(arr: Tensor, new_shape: Tuple[int, int, int, int]) -> Tensor:
     """
     NOTE This is the inverse of tile_matrix. This function reassembles the 
     original array from its tiled form. The input array must be 3D.
     
     Args:
-        `arr` (torch.Tensor): The input array in its tiled form.
-        `arr_shape` (Tuple[int, int]): The shape of the reassembled array.
+        `arr` (Tensor): The input array in its tiled form.
+        `new_shape` (Tuple[int, int]): The shape of the reassembled array.
         
     Returns:
-        torch.Tensor: The reassembled array.
+        Tensor: The reassembled array.
     """
-    h, w, x, y = arr_shape
+    h, w, x, y = new_shape
     row_size, col_size = arr.shape[1:3]
     # assert len(arr.shape) == 3, "Input array must be 3D"
     # assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
@@ -83,22 +83,22 @@ def assemble_4d_kernel(arr: Tensor, arr_shape: Tuple[int, int, int, int]) -> Ten
     return out
 
 
-def cut_matrix(arr: Tensor, true_shape: Sequence[int]) -> Tensor:
+def cut_matrix(arr: Tensor, new_shape: Sequence[int]) -> Tensor:
     """
     This function cuts the padded matrix to its true shape.
     
     Args:
-        `arr` (torch.Tensor): The input array to be cut.
-        `true_shape` (Sequence[int]): The true shape of the matrix.
+        `arr` (Tensor): The input array to be cut.
+        `new_shape` (Sequence[int]): The true shape of the matrix.
         
     Returns:
-        torch.Tensor: The cut array.
+        Tensor: The cut array.
     """
-    h, w = true_shape[0:2]
+    h, w = new_shape[:2]
     return arr[:h, :w]
     
     
-def get_tile_size(param_shape: Tuple[int, int], 
+def get_tile_size(param_shape: Sequence[int], 
                     max_gnet_batch: int) -> Tuple[int, int, int, int]:
     """
     This function calculates the number of row and column tiles for a given
@@ -107,11 +107,11 @@ def get_tile_size(param_shape: Tuple[int, int],
     tile is less than or equal to the maximum parameter count per tile.
 
     Args:
-        param_shape (Tuple[int, int]): Shape of the weight matrix.
+        param_shape (Sequence[int]): Shape of the weight matrix.
         max_gnet_batch (int): Maximum number of parameters per tile.
 
     Returns:
-        Tuple[int, int]: The number of row and column tiles.
+        Tuple[int, int, int, int]: The number of row and column tiles.
     """
     row_size, col_size = param_shape
     
@@ -128,7 +128,7 @@ def get_tile_size(param_shape: Tuple[int, int],
 
 def make_row_col_encoding(param_shape: Sequence[int], 
                         encoding_types: Sequence[EncodingType],
-                        num_encoding_bits: Sequence[int]) -> torch.Tensor:
+                        num_encoding_bits: Sequence[int]) -> Tensor:
     """
     This function creates inputs for the G-Nets that encode the position of the
     weights in the weight matrix. The encoding can either be done using one-hot
@@ -145,7 +145,7 @@ def make_row_col_encoding(param_shape: Sequence[int],
         `num_encoding_bits` (Sequence[int]): Number of bits for each axis.
         
     Returns:
-        torch.Tensor: Array of shape (np.prod(dims), np.sum(bits)).
+        Tensor: Array of shape (np.prod(dims), np.sum(bits)).
     """
     param_shape, num_encoding_bits = np.atleast_1d(param_shape, num_encoding_bits)
     row_col_encoding = np.zeros((param_shape.prod(), num_encoding_bits.sum()))
@@ -191,6 +191,65 @@ def make_row_col_encoding(param_shape: Sequence[int],
     
     encoded_dims = [get_encoding_for_dim(i) for i in range(num_encoding_types)]
     row_col_encoding = np.concatenate(encoded_dims, axis=1)
+
+    # Make inputs a torch tensor and detach from computational graph
+    row_col_encoding = torch.tensor(row_col_encoding, 
+                                    dtype=torch.float, 
+                                    requires_grad=False)
+
+    # Normalization for Xavier initialization
+    with torch.no_grad():
+        row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / \
+                            torch.std(row_col_encoding)
+        row_col_encoding -= row_col_encoding.min() # inputs larger than 0
+    return row_col_encoding  
+
+
+def make_random_row_col_encoding(param_shape: Sequence[int], 
+                                encoding_types: Sequence[EncodingType],
+                                num_encoding_bits: Sequence[int]) -> Tensor:
+    """
+    TODO docstring
+    
+    Examples:
+    
+    
+    Args:
+        `param_shape` (Sequence[int]): Shape of the weight matrix.
+        `encoding_types` (Sequence[EncodingType]): Encoding type for each axis.
+        `num_encoding_bits` (Sequence[int]): Number of bits for each axis.
+        
+    Returns:
+        Tensor: Array of shape (np.prod(dims), np.sum(bits)).
+    """
+    param_shape, num_encoding_bits = np.atleast_1d(param_shape, num_encoding_bits)
+    row_col_encoding = np.zeros((param_shape.prod(), num_encoding_bits.sum()))
+    num_encoding_types = len(encoding_types)
+
+    # This will compute the encoding for axis i
+    def get_encoding_for_dim(i: int) -> np.ndarray:
+        # Compute the encoding for the i-th axis
+        shape = np.ones(param_shape.size, dtype=np.int16)
+        shape[i] = param_shape[i]
+        dim_encoding = np.arange(param_shape[i]).reshape(shape)
+        
+        # Replicate the encoding for the other axes
+        tiling = copy.copy(param_shape)
+        tiling[i] = 1
+        dim_encoding = np.tile(dim_encoding, tiling)   
+
+        # Flatten the encoding
+        dim_encoding = np.reshape(dim_encoding, (np.prod(param_shape), 1))
+
+        one_hot_encoding = np.random.normal(0.0, 1.0, (param_shape[i], num_encoding_bits[i]))
+        dim_encoding = one_hot_encoding[dim_encoding.squeeze(), :]
+            
+        return dim_encoding
+    
+    encoded_dims = [get_encoding_for_dim(i) for i in range(num_encoding_types)]
+    row_col_encoding = np.concatenate(encoded_dims, axis=1)
+    
+    row_col_encoding = np.random.normal(0.0, 1.0, row_col_encoding.shape)
 
     # Make inputs a torch tensor and detach from computational graph
     row_col_encoding = torch.tensor(row_col_encoding, 
