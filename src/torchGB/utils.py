@@ -184,7 +184,7 @@ def make_row_col_encoding(param_shape: Sequence[int],
             # Convert to binary numbers 
             # Take only the lowest bits
             dim_encoding = bins[dim_encoding.squeeze(), :] 
-            dim_encoding = dim_encoding[:, (max_bits - num_encoding_bits[i]):(max_bits)] 
+            # dim_encoding = dim_encoding[:, (max_bits - num_encoding_bits[i]):(max_bits)] 
         else:
             raise ValueError("Invalid encoding type!")
         return dim_encoding
@@ -201,7 +201,7 @@ def make_row_col_encoding(param_shape: Sequence[int],
     with torch.no_grad():
         row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / \
                             torch.std(row_col_encoding)
-        row_col_encoding -= row_col_encoding.min() # inputs larger than 0
+        row_col_encoding /= torch.sqrt(torch.tensor(2.)) # inputs larger than 0
     return row_col_encoding  
 
 

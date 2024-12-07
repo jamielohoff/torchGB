@@ -53,11 +53,11 @@ class GenomicBottleNet(nn.Module):
         for layer in self.layers[:-1]:
             x = self.activation_fn(layer(x))
         x = self.layers[-1](x) # no non-linearity on the last layer
-        return x # * self.output_scale
+        return x * self.output_scale
     
     def init_weights(self, module: nn.Module) -> None:
         if isinstance(module, nn.Linear):
-            nn.init.normal_(module.weight, std=1.35*0.02, mean=0.0)
+            # nn.init.normal_(module.weight, std=1.35*0.02, mean=0.0)
             if module.bias is not None:
                 nn.init.zeros_(module.bias) # nn.init.normal_(module.bias, std=0.02) # 
                 
@@ -67,19 +67,20 @@ GNetLayerTuple = Tuple[Tensor, Sequence[GenomicBottleNet], Sequence[int], float]
 
 def square_conv2d_gnet_layer(param: Tensor, 
                             hidden_dim: int, 
-                            gnet_batchsize: int) -> GNetLayerTuple:   
-    num_encoding_bits = ceil(np.log(param.shape)/np.log(2))
-    num_encoding_bits[:2] = param.shape[:2]
+                            max_gnet_batch: int) -> GNetLayerTuple:
+    param_shape = param.data.shape          
+    
+    tile_size = ceil(np.sqrt(max_gnet_batch//(param_shape[2]*param_shape[3])))
+    tile_shape = (tile_size, tile_size, param_shape[2], param_shape[3]) 
+    num_row_tiles = ceil(param_shape[0]/tile_size)
+    num_col_tiles = ceil(param_shape[1]/tile_size)
+    
+    num_encoding_bits = ceil(np.log(tile_shape)/np.log(2))
+    num_encoding_bits[2:] = param_shape[2:]
     num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
     encoding_type = (EncodingType.BINARY, EncodingType.BINARY, 
                     EncodingType.ONEHOT, EncodingType.ONEHOT)   
 
-    kernel_size = param.shape[2]*param.shape[3]
-    tile_size = ceil(np.sqrt(gnet_batchsize//kernel_size))
-    num_row_tiles = ceil(param.shape[0]/tile_size)
-    num_col_tiles = ceil(param.shape[1]/tile_size)
-
-    tile_shape = (tile_size, tile_size, param.shape[2], param.shape[3])  
     row_col_encoding = make_row_col_encoding(tile_shape,
                                             encoding_type,
                                             num_encoding_bits)
@@ -98,12 +99,17 @@ def square_conv2d_gnet_layer(param: Tensor,
 
 def default_gnet_layer(param: Tensor, 
                         hidden_dim: int, 
-                        gnet_batchsize: int) -> GNetLayerTuple:
-    num_encoding_bits = ceil(np.log(param.shape)/np.log(2))
+                        max_gnet_batch: int) -> GNetLayerTuple:
+    param_shape = param.data.shape
+    _sizes = get_tile_size(param_shape, max_gnet_batch)
+    num_row_tiles, num_col_tiles, row_tile_size, col_tile_size = _sizes
+    tile_shape = (row_tile_size, col_tile_size)
+    
+    num_encoding_bits = ceil(np.log(tile_shape)/np.log(2))
     num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
     encoding_type = (EncodingType.BINARY, EncodingType.BINARY)
     
-    row_col_encoding = make_random_row_col_encoding(param.shape,
+    row_col_encoding = make_row_col_encoding(tile_shape,
                                             encoding_type, 
                                             num_encoding_bits)
     num_inputs = row_col_encoding.shape[-1]
@@ -132,10 +138,9 @@ def square_default_gnet_layer(param: Tensor,
     num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
     encoding_type = (EncodingType.BINARY, EncodingType.BINARY)
     
-    tile_shape = (tile_size, tile_size)
-    row_col_encoding = make_random_row_col_encoding(tile_shape,
-                                            encoding_type, 
-                                            num_encoding_bits)
+    row_col_encoding = make_random_row_col_encoding(tile_size,
+                                                    encoding_type, 
+                                                    num_encoding_bits)
     num_inputs = row_col_encoding.shape[-1]
     
     # Normalizes the output to follow the initial parameter
@@ -147,7 +152,7 @@ def square_default_gnet_layer(param: Tensor,
     gnets = [GenomicBottleNet(gnet_sizes, output_scale) 
             for _ in range(num_row_tiles*num_col_tiles)]      
     
-    return row_col_encoding, gnets, tile_shape, output_scale
+    return row_col_encoding, gnets, tile_size, output_scale
 
 
 def qkv_gnet_layer(param: Tensor, 

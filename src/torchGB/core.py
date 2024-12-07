@@ -19,6 +19,7 @@ from .gnet import (GenomicBottleNet,
                     square_qkv_gnet_layer,
                     onedim_gnet_layer,
                     ceil)
+# from lamb import Lamb
 
 
 @dataclass
@@ -81,7 +82,7 @@ class GenomicBottleneck(nn.Module):
     
     def __init__(self, 
                 model: nn.Module, 
-                num_batches: int,
+                num_batches: int = 0,
                 hidden_dim: int = 32, 
                 lr: float = 1e-3,
                 gnet_batchsize: int = 36_864,
@@ -94,7 +95,9 @@ class GenomicBottleneck(nn.Module):
         # Stores all the information about the gnets
         self.gnetdict = {}
         load_per_rank = np.zeros(dist.get_world_size())       
-        for name, mod in self.model.module.named_children(): 
+        for name, mod in model.module.named_modules():
+            if (not isinstance(mod, nn.Linear)) and (not isinstance(mod, nn.Conv2d)):
+                continue
             for pname, param in mod.named_parameters():    
                 _name = name + "." + pname 
                 ignore_param = any([lname in _name for lname in ignore_layers])
@@ -284,7 +287,9 @@ class GenomicBottleneck(nn.Module):
         new weights.
         """
         param_list = {i:[] for i in range(dist.get_world_size())}
-        for name, mod in self.model.module.named_children(): 
+        for name, mod in self.model.module.named_modules(): 
+            if (not isinstance(mod, nn.Linear)) and (not isinstance(mod, nn.Conv2d)):
+                continue
             for pname, param in mod.named_parameters():    
                 _name = name + "." + pname 
                 if _name in self.gnetdict.keys():
@@ -295,9 +300,6 @@ class GenomicBottleneck(nn.Module):
                             gnet_input = self.gnetdict[_name].gnet_input
                             new_weight_tile = gnet(gnet_input)
                             new_weight_tile = new_weight_tile.reshape(tile_shape)
-                            
-                            # We substract the mean from the tiles to remove any
-                            # bias/anisotropy in the weights
                             # new_weight_tile -= new_weight_tile.mean()
                             new_weights.append(new_weight_tile)
                             
@@ -313,7 +315,7 @@ class GenomicBottleneck(nn.Module):
                         else:
                             num_row_tiles = ceil(param.shape[0]/tile_shape[0])
                             num_col_tiles = ceil(param.shape[1]/tile_shape[1])
-                        
+                            
                         if isinstance(mod, nn.Conv2d):
                             shape = (num_row_tiles*tile_shape[0], 
                                         num_col_tiles*tile_shape[1], 
@@ -351,7 +353,9 @@ class GenomicBottleneck(nn.Module):
         backward pass through the model and propagates them through the G-Net to
         update the parameters.
         """              
-        for name, mod in self.model.module.named_children(): 
+        for name, mod in self.model.module.named_modules(): 
+            if (not isinstance(mod, nn.Linear)) and (not isinstance(mod, nn.Conv2d)):
+                continue
             for pname, param in mod.named_parameters():  
                 _name = name + "." + pname 
                 if _name in self.gnetdict.keys():
@@ -363,10 +367,11 @@ class GenomicBottleneck(nn.Module):
     def step(self) -> None:
         for name in self.gnetdict.keys():
             if self.gnetdict[name].rank == dist.get_rank():
-                for optimizer, scheduler in zip(self.gnetdict[name].optimizers, 
-                                                self.gnetdict[name].schedulers):
+                # for optimizer, scheduler in zip(self.gnetdict[name].optimizers, 
+                #                                 self.gnetdict[name].schedulers):
+                for optimizer in self.gnetdict[name].optimizers:
                     optimizer.step()
-                    scheduler.step()
+                    # scheduler.step()
                     
     def _add_gnets(self, 
                     name: str, 
@@ -397,17 +402,17 @@ class GenomicBottleneck(nn.Module):
         
         num_layers = len(gnets[0].sizes)
         _lr = self.lr / np.sqrt(output_scale.item()*num_layers)
-        optimizer = lambda params: optim.AdamW(params, lr=_lr, weight_decay=1e-5)
+        optimizer = lambda params: torch.optim.SGD(params, lr=_lr)
         optimizers = [optimizer(gnet.parameters()) for gnet in gnets]
         
-        scheduler = lambda optim: OneCycleLR(optim,
-                                            max_lr=_lr, 
-                                            pct_start=0.2,
-                                            div_factor=250,
-                                            final_div_factor=1000,
-                                            total_steps=self.num_batches)
+        # scheduler = lambda optim: OneCycleLR(optim,
+        #                                     max_lr=_lr, 
+        #                                     pct_start=0.2,
+        #                                     div_factor=250,
+        #                                     final_div_factor=1000,
+        #                                     total_steps=self.num_batches)
         
-        schedulers = [scheduler(optim) for optim in optimizers]
+        # schedulers = [scheduler(optim) for optim in optimizers]
         
         grad_scale = torch.tensor(grad_scale).to(device_id)        
         self.gnetdict[name] = GNetLayer(name=name,
@@ -415,7 +420,7 @@ class GenomicBottleneck(nn.Module):
                                         tile_shape=tile_shape,
                                         gnets=gnets,
                                         optimizers=optimizers,
-                                        schedulers=schedulers,
+                                        # schedulers=schedulers,
                                         gnet_input=row_col_encodings,
                                         weights=param.data,
                                         grad_scale=grad_scale)
@@ -424,5 +429,5 @@ class GenomicBottleneck(nn.Module):
                 f"Layer size: {param.shape}\n"
                 f"Device ID: {device_id}\n"
                 f"Number of g-nets: {len(gnets)}\n"
-                f"Learning rate: {_lr}")
+                f"Learning rate: {_lr}\n")
 
