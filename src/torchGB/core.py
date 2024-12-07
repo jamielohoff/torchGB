@@ -12,8 +12,8 @@ from torch import Tensor
 
 from torch.optim.lr_scheduler import OneCycleLR
 
-from utils import assemble_matrix, cut_matrix, assemble_4d_kernel
-from gnet import (GenomicBottleNet, 
+from .utils import assemble_matrix, cut_matrix, assemble_4d_kernel
+from .gnet import (GenomicBottleNet, 
                     square_conv2d_gnet_layer,
                     square_default_gnet_layer, 
                     square_qkv_gnet_layer,

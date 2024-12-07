@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from utils import (make_row_col_encoding, 
+from .utils import (make_row_col_encoding, 
                     make_random_row_col_encoding,
                     get_tile_size, 
                     EncodingType)

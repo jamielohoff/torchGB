@@ -37,7 +37,7 @@ def trainE2E(model, rank, train_loader, optimizer, GNets):
     # print('Training ----------------------------------')
 
     criterion = torch.nn.CrossEntropyLoss()
-    correct = 0;
+    correct = 0
     
     model.train()
     GNets.train() 
@@ -280,4 +280,5 @@ def main():
 
 if __name__ == '__main__':
     model_ResNet = main()
+    
     
