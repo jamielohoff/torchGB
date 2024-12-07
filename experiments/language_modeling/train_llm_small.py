@@ -20,7 +20,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
+import seaborn as sns
+
 from torchGB import GenomicBottleneck
+from torchGB.lamb import Lamb
 from _transformer import GPT, generate_square_subsequent_mask, predict_sequence
 from utils import (get_dataloader, 
                     load_model_layers, 
@@ -215,7 +218,8 @@ model = GPT(**experiment_config["model"]).to(rank)
 model = DDP(model, device_ids=[rank], output_device=rank)
 
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
+# optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
+optimizer = optim.AdamW(model.parameters(), lr=experiment_config["lr"], weight_decay=1e-5)
 scheduler = None
 
 if args.scheduler:
@@ -284,7 +288,7 @@ if args.load_gnets is not None:
     gnets.load(args.load_gnets)
     logger.debug("Predicting weights...")
     with torch.no_grad():
-        gnets.predict_weights(model)
+        gnets.predict_weights()
 
 
 # Delete the G-Nets after initialization if we only initialize the model with them
@@ -319,7 +323,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
 
         if enable_gnets:
             gnets.zero_grad()
-            gnets.predict_weights(model) # implicitly updates the model weights!
+            gnets.predict_weights() # implicitly updates the model weights!
 
         output = model(data[:, :SEQ_LEN-1], src_mask)
         loss = criterion(output.view(-1, VOCAB_SIZE), data[:, 1:SEQ_LEN].reshape(-1))
@@ -332,9 +336,15 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         if scheduler is not None: scheduler.step()
         if enable_gnets: gnets.step()
         
-        if global_step % 100 == 0 and rank == 0:
-            plt.hist(model.module.transformer_encoder.layers[0].self_attn.in_proj_weight.flatten().detach().cpu().numpy(), bins=100, range=(-0.1, 0.1))
-            plt.savefig(f"./hist/{experiment_name}_layer0_inprojweight_hist_{global_step}.png")
+        if global_step % 1000 == 0 and rank == 0:
+            attn_map = model.module.transformer_encoder.layers[0].self_attn.in_proj_weight
+            plt.hist(attn_map.flatten().detach().cpu().numpy(), bins=100, range=(-0.12, 0.12))
+            plt.savefig(f"./hist/{experiment_name}_layer0_inprojweight_{global_step}.png")
+            plt.close()
+            
+            sns.heatmap(attn_map.detach().cpu().numpy(), vmin=-.12, vmax=.12)
+            plt.savefig(f"./heat/{experiment_name}_layer0_inprojweight_{global_step}.png")
+            plt.close()
             for i in range(6):
                 #     print("in_proj_weight", model.module.transformer_encoder.layers[i].self_attn.in_proj_weight.mean())
                 #     print("in_proj_bias", model.module.transformer_encoder.layers[i].self_attn.in_proj_bias.mean())
@@ -388,7 +398,8 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             
             if rank == 0:
                 print(test_seq)
-                logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
+                logger.info(f"validation loss {float(val_loss):5.2f} | "
+                            f"validation ppl {val_ppl:8.2f}")
                 # writer.add_scalar("loss/val", val_loss, global_step=global_step)
                 # writer.add_scalar("ppl/val", val_ppl, global_step=global_step)
                 run.log({"validation_loss": val_loss, "val ppl": val_ppl})
@@ -444,7 +455,8 @@ val_loader = get_dataloader(tokenized_val_dataset, rank, world_size, BATCHSIZE)
 if rank == 0:
     logger.info(f"Number of model parameters: {num_params}")   
     logger.info(f"G-Net compression: {compression_factor}") 
-    logger.info(f"validation loss {float(val_loss):5.2f} | validation ppl {val_ppl:8.2f}")
+    logger.info(f"validation loss {float(val_loss):5.2f} | "
+                f"validation ppl {val_ppl:8.2f}")
     
     run_config = {"commit_hash": commit_hash,
                     "batchsize": BATCHSIZE,

@@ -65,6 +65,7 @@ slicing_config.yml
 **/wandb/
 **/wandb_jureca/
 **/hist/
+**/heat/
 **/plots/
 *.pt
 *.pth
@@ -74,3 +75,4 @@ slicing_config.yml
 *.slurm
 **/gnet/
 **/runs/
+*.png
