@@ -18,7 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 # import lamb
-import core as gn
+import torchGB.core as gn
 # from torch.profiler import profile, ProfilerActivity
 
 import torch.distributed as dist
@@ -98,7 +98,7 @@ def trainE2E(model, rank, train_loader, optimizer, GNets):
     return train_acc, update_readout
 
 def testResNet(model, rank, val_loader):
-    correct = 0;
+    correct = 0
     # model.eval()
     with torch.no_grad():
         for batch_idx, (inputs, labels) in enumerate(val_loader):

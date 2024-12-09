@@ -10,8 +10,6 @@ import torch.optim as optim
 import torch.distributed as dist
 from torch import Tensor
 
-from torch.optim.lr_scheduler import OneCycleLR
-
 from .utils import assemble_matrix, cut_matrix, assemble_4d_kernel
 from .gnet import (GenomicBottleNet, 
                     square_conv2d_gnet_layer,
@@ -19,7 +17,6 @@ from .gnet import (GenomicBottleNet,
                     square_qkv_gnet_layer,
                     onedim_gnet_layer,
                     ceil)
-# from lamb import Lamb
 
 
 @dataclass
@@ -94,10 +91,9 @@ class GenomicBottleneck(nn.Module):
         
         # Stores all the information about the gnets
         self.gnetdict = {}
-        load_per_rank = np.zeros(dist.get_world_size())       
-        for name, mod in model.module.named_modules():
-            if (not isinstance(mod, nn.Linear)) and (not isinstance(mod, nn.Conv2d)):
-                continue
+        load_per_rank = np.zeros(dist.get_world_size()) 
+           
+        for name, mod in self.model.module.layers.named_children(): 
             for pname, param in mod.named_parameters():    
                 _name = name + "." + pname 
                 ignore_param = any([lname in _name for lname in ignore_layers])
@@ -287,7 +283,7 @@ class GenomicBottleneck(nn.Module):
         new weights.
         """
         param_list = {i:[] for i in range(dist.get_world_size())}
-        for name, mod in self.model.module.named_modules(): 
+        for name, mod in self.model.module.layers.named_children(): 
             if (not isinstance(mod, nn.Linear)) and (not isinstance(mod, nn.Conv2d)):
                 continue
             for pname, param in mod.named_parameters():    
@@ -299,10 +295,13 @@ class GenomicBottleneck(nn.Module):
                         for gnet in self.gnetdict[_name].gnets:
                             gnet_input = self.gnetdict[_name].gnet_input
                             new_weight_tile = gnet(gnet_input)
+                            # print("new_weight_tile", new_weight_tile)
                             new_weight_tile = new_weight_tile.reshape(tile_shape)
+                            
+                            # We substract the mean from the tiles to remove any
+                            # bias/anisotropy in the weights
                             # new_weight_tile -= new_weight_tile.mean()
                             new_weights.append(new_weight_tile)
-                            
                         # TODO make this prettier
                         # Assemble the new weight tiles into the full weight matrix
                         new_weights = torch.stack(new_weights, dim=0)
@@ -353,7 +352,7 @@ class GenomicBottleneck(nn.Module):
         backward pass through the model and propagates them through the G-Net to
         update the parameters.
         """              
-        for name, mod in self.model.module.named_modules(): 
+        for name, mod in self.model.module.layers.named_children(): 
             if (not isinstance(mod, nn.Linear)) and (not isinstance(mod, nn.Conv2d)):
                 continue
             for pname, param in mod.named_parameters():  
@@ -401,7 +400,9 @@ class GenomicBottleneck(nn.Module):
         row_col_encodings = row_col_encodings.to(device_id)
         
         num_layers = len(gnets[0].sizes)
-        _lr = self.lr / np.sqrt(output_scale.item()*num_layers)
+        print("lr", self.lr)
+        _lr = self.lr # / np.sqrt(output_scale.item()*num_layers)
+        # NOTE: Replaced AdamW with SGD for debugging purposes
         optimizer = lambda params: torch.optim.SGD(params, lr=_lr)
         optimizers = [optimizer(gnet.parameters()) for gnet in gnets]
         
@@ -414,7 +415,7 @@ class GenomicBottleneck(nn.Module):
         
         # schedulers = [scheduler(optim) for optim in optimizers]
         
-        grad_scale = torch.tensor(grad_scale).to(device_id)        
+        grad_scale = 1. # torch.tensor(grad_scale).to(device_id)        
         self.gnetdict[name] = GNetLayer(name=name,
                                         rank=device_id,
                                         tile_shape=tile_shape,

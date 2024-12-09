@@ -190,7 +190,10 @@ def make_row_col_encoding(param_shape: Sequence[int],
         return dim_encoding
     
     encoded_dims = [get_encoding_for_dim(i) for i in range(num_encoding_types)]
-    row_col_encoding = np.concatenate(encoded_dims, axis=1)
+
+    row_col_encoding = np.concatenate(encoded_dims, axis=-1)
+    if row_col_encoding.ndim == 1:
+        row_col_encoding = row_col_encoding[np.newaxis, :]
 
     # Make inputs a torch tensor and detach from computational graph
     row_col_encoding = torch.tensor(row_col_encoding, 
@@ -198,10 +201,10 @@ def make_row_col_encoding(param_shape: Sequence[int],
                                     requires_grad=False)
 
     # Normalization for Xavier initialization
-    with torch.no_grad():
-        row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / \
-                            torch.std(row_col_encoding)
-        row_col_encoding /= torch.sqrt(torch.tensor(2.)) # inputs larger than 0
+    # with torch.no_grad():
+    #     row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / \
+    #                         torch.std(row_col_encoding)
+    #     row_col_encoding /= torch.sqrt(torch.tensor(2.)) # inputs larger than 0
     return row_col_encoding  
 
 
