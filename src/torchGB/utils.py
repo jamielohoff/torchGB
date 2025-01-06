@@ -74,9 +74,6 @@ def assemble_4d_kernel(arr: Tensor, new_shape: Tuple[int, int, int, int]) -> Ten
     """
     h, w, x, y = new_shape
     row_size, col_size = arr.shape[1:3]
-    # assert len(arr.shape) == 3, "Input array must be 3D"
-    # assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
-    # assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
     out = (arr.reshape(h // row_size, -1, row_size, col_size, x, y)
                 .swapaxes(1, 2)
                 .reshape(h, w, x, y))
@@ -181,10 +178,8 @@ def make_row_col_encoding(param_shape: Sequence[int],
             for j in range(num_digits):
                 bins[j, :] = np.array(list(np.binary_repr(j).zfill(max_bits))).astype(np.int16)
                 
-            # Convert to binary numbers 
-            # Take only the lowest bits
-            dim_encoding = bins[dim_encoding.squeeze(), :] 
-            # dim_encoding = dim_encoding[:, (max_bits - num_encoding_bits[i]):(max_bits)] 
+            # Convert to binary numbers
+            dim_encoding = bins[dim_encoding.squeeze(), :]
         else:
             raise ValueError("Invalid encoding type!")
         return dim_encoding
@@ -201,68 +196,7 @@ def make_row_col_encoding(param_shape: Sequence[int],
                                     requires_grad=False)
 
     # Normalization for Xavier initialization
-    # with torch.no_grad():
-    #     row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / \
-    #                         torch.std(row_col_encoding)
-    #     row_col_encoding /= torch.sqrt(torch.tensor(2.)) # inputs larger than 0
-    return row_col_encoding  
-
-
-def make_random_row_col_encoding(param_shape: Sequence[int], 
-                                encoding_types: Sequence[EncodingType],
-                                num_encoding_bits: Sequence[int]) -> Tensor:
-    """
-    TODO docstring
-    
-    Examples:
-    
-    
-    Args:
-        `param_shape` (Sequence[int]): Shape of the weight matrix.
-        `encoding_types` (Sequence[EncodingType]): Encoding type for each axis.
-        `num_encoding_bits` (Sequence[int]): Number of bits for each axis.
-        
-    Returns:
-        Tensor: Array of shape (np.prod(dims), np.sum(bits)).
-    """
-    param_shape, num_encoding_bits = np.atleast_1d(param_shape, num_encoding_bits)
-    row_col_encoding = np.zeros((param_shape.prod(), num_encoding_bits.sum()))
-    num_encoding_types = len(encoding_types)
-
-    # This will compute the encoding for axis i
-    def get_encoding_for_dim(i: int) -> np.ndarray:
-        # Compute the encoding for the i-th axis
-        shape = np.ones(param_shape.size, dtype=np.int16)
-        shape[i] = param_shape[i]
-        dim_encoding = np.arange(param_shape[i]).reshape(shape)
-        
-        # Replicate the encoding for the other axes
-        tiling = copy.copy(param_shape)
-        tiling[i] = 1
-        dim_encoding = np.tile(dim_encoding, tiling)   
-
-        # Flatten the encoding
-        dim_encoding = np.reshape(dim_encoding, (np.prod(param_shape), 1))
-
-        one_hot_encoding = np.random.normal(0.0, 1.0, (param_shape[i], num_encoding_bits[i]))
-        dim_encoding = one_hot_encoding[dim_encoding.squeeze(), :]
-            
-        return dim_encoding
-    
-    encoded_dims = [get_encoding_for_dim(i) for i in range(num_encoding_types)]
-    row_col_encoding = np.concatenate(encoded_dims, axis=1)
-    
-    row_col_encoding = np.random.normal(0.0, 1.0, row_col_encoding.shape)
-
-    # Make inputs a torch tensor and detach from computational graph
-    row_col_encoding = torch.tensor(row_col_encoding, 
-                                    dtype=torch.float, 
-                                    requires_grad=False)
-
-    # Normalization for Xavier initialization
     with torch.no_grad():
         row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / \
                             torch.std(row_col_encoding)
-        row_col_encoding -= row_col_encoding.min() # inputs larger than 0
     return row_col_encoding  
-
