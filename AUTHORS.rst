@@ -2,6 +2,6 @@
 Contributors
 ============
 
-* Jamie Lohoff <j.grieser@fz-juelich.de>
+* Jamie Lohoff <ja.lohoff@fz-juelich.de>
 * Sergey Shuvaev
 * Daniel Barabasi

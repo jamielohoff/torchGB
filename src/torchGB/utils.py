@@ -200,3 +200,4 @@ def make_row_col_encoding(param_shape: Sequence[int],
         row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / \
                             torch.std(row_col_encoding)
     return row_col_encoding  
+

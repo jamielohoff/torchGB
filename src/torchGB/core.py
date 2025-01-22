@@ -434,3 +434,4 @@ class GenomicBottleneck(nn.Module):
                 f"Device ID: {device_id}\n"
                 f"Number of g-nets: {len(gnets)}\n"
                 f"Learning rate: {_lr}\n")
+        

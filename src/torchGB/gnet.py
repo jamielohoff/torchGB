@@ -195,3 +195,4 @@ def square_qkv_gnet_layer(param: Tensor,
             for _ in range(3*num_row_tiles*num_col_tiles)]     # add 3*
     
     return row_col_encoding, gnets, tile_shape, output_scale
+
