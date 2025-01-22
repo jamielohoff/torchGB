@@ -231,6 +231,9 @@ html_static_path = ["_static"]
 # Output file base name for HTML help builder.
 htmlhelp_basename = "torchGB-doc"
 
+# Automatically generate API summaries
+autosummary_generate = True
+
 
 # -- Options for LaTeX output ------------------------------------------------
 
