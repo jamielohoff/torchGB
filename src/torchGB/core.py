@@ -10,14 +10,11 @@ import torch.optim as optim
 import torch.distributed as dist
 from torch import Tensor
 
-from torch.optim.lr_scheduler import OneCycleLR
-
 from .utils import assemble_matrix, cut_matrix, assemble_4d_kernel
 from .gnet import (GenomicBottleNet, 
                     square_conv2d_gnet_layer,
                     square_default_gnet_layer, 
                     square_qkv_gnet_layer,
-                    onedim_gnet_layer,
                     ceil)
 
 
@@ -58,7 +55,7 @@ class GenomicBottleneck(nn.Module):
     The `GenomicBottleneck` class implements a hypernetwork that predicts all
     learnable weights matrices in a given neural network model. For every weight,
     a G-Net is created that predicts the new weights of the layer.
-    When launched with the `-m torch.distributed.run` command, every G-Net is 
+    When launched with the `torchrun -nproc_per_node='num_gpus'` command, every G-Net is 
     stored on a different device to parallelize the computation. Furthermore,
     every G-Net has its own optimizer.
     Gradients are backpropagated by first backpropagating the gradients through
@@ -81,10 +78,10 @@ class GenomicBottleneck(nn.Module):
     
     def __init__(self, 
                 model: nn.Module, 
-                num_batches: int,
+                num_batches: int = 0,
                 hidden_dim: int = 32, 
-                lr: float = 1e-3,
-                gnet_batchsize: int = 36_864,
+                lr: float = 0.001,
+                gnet_batchsize: int = 10000,
                 ignore_layers: Sequence[str] = []) -> None:
         super(GenomicBottleneck, self).__init__()             
         self.model = model
@@ -93,12 +90,15 @@ class GenomicBottleneck(nn.Module):
         
         # Stores all the information about the gnets
         self.gnetdict = {}
-        load_per_rank = np.zeros(dist.get_world_size())       
-        for name, mod in self.model.module.named_children(): 
+        load_per_rank = np.zeros(dist.get_world_size()) 
+           
+        for name, mod in self.model.module.named_modules(): 
+            if (not isinstance(mod, nn.Linear)) and (not isinstance(mod, nn.Conv2d)):
+                continue
             for pname, param in mod.named_parameters():    
                 _name = name + "." + pname 
                 ignore_param = any([lname in _name for lname in ignore_layers])
-                if param.requires_grad and not ignore_param:
+                if param.requires_grad and not ignore_param and not "bias" in pname:
                     # This implements a rudimentary load balancer across devices
                     # that removes the bias towards the first device
                     device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
@@ -110,17 +110,6 @@ class GenomicBottleneck(nn.Module):
                                 out = square_conv2d_gnet_layer(param, 
                                                                 hidden_dim,
                                                                 gnet_batchsize)   
-                                # TODO reintegrate this
-                                # Add layer to the dict                                                          
-                                # pname_cut = pname.split("weight")[0] # that's a sloppy way to do that
-                                # pname_cut = pname_cut.split("bias")[0]
-                                # for name_tmp, layer_tmp in model.named_modules():
-                                #     if name_tmp == pname_cut:
-                                #         _out_size = get_tensor_dimensions(model, layer_tmp, input_shape)
-                                #         _out_size = torch.tensor(_out_size)
-                                        
-                                # if isinstance(layer, nn.Conv2d):
-                                #     grad_scale = _out_size[-1][-1] 
                                 self._add_gnets(_name, device_id, param, *out)
                                 
                         elif isinstance(mod, nn.TransformerEncoder):
@@ -135,11 +124,6 @@ class GenomicBottleneck(nn.Module):
                                                                 hidden_dim,
                                                                 gnet_batchsize) 
                                 self._add_gnets(_name, device_id, param, *out)
-                            elif "bias" in pname:
-                                out = onedim_gnet_layer(param, 
-                                                        hidden_dim,
-                                                        gnet_batchsize)
-                                self._add_gnets(_name, device_id, param, *out)
                                         
                         elif isinstance(mod, nn.Linear):     
                             if "weight" in pname:                   
@@ -147,11 +131,6 @@ class GenomicBottleneck(nn.Module):
                                 out = square_default_gnet_layer(param, 
                                                                 hidden_dim,
                                                                 gnet_batchsize)
-                                self._add_gnets(_name, device_id, param, *out)
-                            else:
-                                out = onedim_gnet_layer(param, 
-                                                        hidden_dim,
-                                                        gnet_batchsize)
                                 self._add_gnets(_name, device_id, param, *out)
                     else:
                         self.gnetdict[_name] = GNetLayer(name=_name, rank=device_id)
@@ -245,7 +224,10 @@ class GenomicBottleneck(nn.Module):
                       
     def load(self, fname: str) -> None:
         """
-        Load the G-Nets from a checkpoint file.
+        Loads the G-Nets from a specified file.
+        This function loads the state dictionaries of the G-Nets and their corresponding
+        optimizers from a checkpoint file. It ensures that only the G-Nets corresponding
+        to the current process rank are loaded.
 
         Args:
             `fname` (str): File from which to load the G-Nets.
@@ -266,16 +248,30 @@ class GenomicBottleneck(nn.Module):
                     opt.load_state_dict(opt_state) 
 
     def train(self) -> None:
+        """
+        Trains the neural networks in the `gnetdict` attribute that are assigned 
+        to the current process rank. This method iterates over the keys in the 
+        `gnetdict` attribute and checks if the `rank` of each `gnetdict` entry
+        matches the current process rank. If it does, it sets the corresponding 
+        neural networks to training mode.
+        """
         for name in self.gnetdict.keys():
             if self.gnetdict[name].rank == dist.get_rank():
                 for gnet in self.gnetdict[name].gnets:
                     gnet.train()
     
     def zero_grad(self) -> None:
+        """
+        Zeros out all gradients in the optimizers, similarly to `loss.zero_grad()`.
+        This function iterates over all the networks in the `gnetdict` dictionary.
+        For each network that is assigned to the current process rank, it sets the 
+        gradients of all associated optimizers to zero.
+        """
+        
         for name in self.gnetdict.keys():
             if self.gnetdict[name].rank == dist.get_rank():
-                for gnet in self.gnetdict[name].gnets:
-                    gnet.zero_grad()
+                for optimizer in self.gnetdict[name].optimizers:
+                    optimizer.zero_grad()
         
     def predict_weights(self) -> None:
         """
@@ -284,7 +280,9 @@ class GenomicBottleneck(nn.Module):
         new weights.
         """
         param_list = {i:[] for i in range(dist.get_world_size())}
-        for name, mod in self.model.module.named_children(): 
+        for name, mod in self.model.module.named_modules(): 
+            if (not isinstance(mod, nn.Linear)) and (not isinstance(mod, nn.Conv2d)):
+                continue
             for pname, param in mod.named_parameters():    
                 _name = name + "." + pname 
                 if _name in self.gnetdict.keys():
@@ -295,25 +293,18 @@ class GenomicBottleneck(nn.Module):
                             gnet_input = self.gnetdict[_name].gnet_input
                             new_weight_tile = gnet(gnet_input)
                             new_weight_tile = new_weight_tile.reshape(tile_shape)
-                            
-                            # We substract the mean from the tiles to remove any
-                            # bias/anisotropy in the weights
-                            # new_weight_tile -= new_weight_tile.mean()
                             new_weights.append(new_weight_tile)
-                            
                         # TODO make this prettier
                         # Assemble the new weight tiles into the full weight matrix
                         new_weights = torch.stack(new_weights, dim=0)
                         
-                        if "in_proj_weight_x" in _name:
+                        if "in_proj_weight_" in _name:
                             num_row_tiles = 3*ceil(param.shape[0]//3/tile_shape[0])
                             num_col_tiles = ceil(param.shape[1]/tile_shape[1])
-                        elif "bias" in _name:
-                            num_col_tiles = num_row_tiles = 1
                         else:
                             num_row_tiles = ceil(param.shape[0]/tile_shape[0])
                             num_col_tiles = ceil(param.shape[1]/tile_shape[1])
-                        
+                            
                         if isinstance(mod, nn.Conv2d):
                             shape = (num_row_tiles*tile_shape[0], 
                                         num_col_tiles*tile_shape[1], 
@@ -321,8 +312,6 @@ class GenomicBottleneck(nn.Module):
                                         param.shape[3])
                             new_weights = assemble_4d_kernel(new_weights, shape)
                             new_weights = cut_matrix(new_weights, param.shape)
-                        elif "bias" in _name:
-                            new_weights = new_weights.squeeze()
                         else:
                             shape = (num_row_tiles*tile_shape[0], 
                                     num_col_tiles*tile_shape[1])
@@ -351,22 +340,40 @@ class GenomicBottleneck(nn.Module):
         backward pass through the model and propagates them through the G-Net to
         update the parameters.
         """              
-        for name, mod in self.model.module.named_children(): 
+        for name, mod in self.model.module.named_modules(): 
+            if (not isinstance(mod, nn.Linear)) and (not isinstance(mod, nn.Conv2d)):
+                continue
             for pname, param in mod.named_parameters():  
                 _name = name + "." + pname 
                 if _name in self.gnetdict.keys():
                     if self.gnetdict[_name].rank == dist.get_rank():
-                        grad_scale = self.gnetdict[_name].grad_scale
+                        grad_scale = self.gnetdict[_name].gnet_input.size()[0] * torch.square(self.gnetdict[_name].gnets[0].output_scale)
                         norm_grad = param.grad / grad_scale
                         self.gnetdict[_name].weights.backward(norm_grad)
                       
     def step(self) -> None:
+        """
+        Performs a single optimization step for each optimizer in the network dictionary.
+
+        This function iterates over the keys in the `gnetdict` attribute, which is a dictionary
+        containing network objects. For each network object that matches the current process rank,
+        it performs an optimization step using the optimizers associated with that network.
+
+        Note:
+            - The function currently only steps the optimizers and not the schedulers, 
+              as the scheduler step code is commented out.
+
+        Attributes:
+            gnetdict (dict): A dictionary where keys are network names and values are network objects
+                             that contain optimizers and schedulers.
+        """
         for name in self.gnetdict.keys():
             if self.gnetdict[name].rank == dist.get_rank():
-                for optimizer, scheduler in zip(self.gnetdict[name].optimizers, 
-                                                self.gnetdict[name].schedulers):
+                # for optimizer, scheduler in zip(self.gnetdict[name].optimizers, 
+                #                                 self.gnetdict[name].schedulers):
+                for optimizer in self.gnetdict[name].optimizers:
                     optimizer.step()
-                    scheduler.step()
+                    # scheduler.step()
                     
     def _add_gnets(self, 
                     name: str, 
@@ -396,26 +403,28 @@ class GenomicBottleneck(nn.Module):
         row_col_encodings = row_col_encodings.to(device_id)
         
         num_layers = len(gnets[0].sizes)
-        _lr = self.lr / np.sqrt(output_scale.item()*num_layers)
-        optimizer = lambda params: optim.AdamW(params, lr=_lr, weight_decay=1e-5)
+        # NOTE: Do not touch! Normalization has been carefully computed...
+        _lr = self.lr / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5
+
+        optimizer = lambda params: optim.SGD(params, lr=_lr)
         optimizers = [optimizer(gnet.parameters()) for gnet in gnets]
         
-        scheduler = lambda optim: OneCycleLR(optim,
-                                            max_lr=_lr, 
-                                            pct_start=0.2,
-                                            div_factor=250,
-                                            final_div_factor=1000,
-                                            total_steps=self.num_batches)
+        # scheduler = lambda optim: OneCycleLR(optim,
+        #                                     max_lr=_lr, 
+        #                                     pct_start=0.2,
+        #                                     div_factor=250,
+        #                                     final_div_factor=1000,
+        #                                     total_steps=self.num_batches)
         
-        schedulers = [scheduler(optim) for optim in optimizers]
+        # schedulers = [scheduler(optim) for optim in optimizers]
         
-        grad_scale = torch.tensor(grad_scale).to(device_id)        
+        grad_scale = 1. # placeholder value; never used
         self.gnetdict[name] = GNetLayer(name=name,
                                         rank=device_id,
                                         tile_shape=tile_shape,
                                         gnets=gnets,
                                         optimizers=optimizers,
-                                        schedulers=schedulers,
+                                        # schedulers=schedulers,
                                         gnet_input=row_col_encodings,
                                         weights=param.data,
                                         grad_scale=grad_scale)
@@ -424,5 +433,4 @@ class GenomicBottleneck(nn.Module):
                 f"Layer size: {param.shape}\n"
                 f"Device ID: {device_id}\n"
                 f"Number of g-nets: {len(gnets)}\n"
-                f"Learning rate: {_lr}")
-
+                f"Learning rate: {_lr}\n")
