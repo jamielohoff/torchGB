@@ -4,17 +4,15 @@ import time
 import argparse
 from loguru import logger
 from tqdm import tqdm
-
-import matplotlib.pyplot as plt
+import wandb
 
 import numpy as np 
+import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.distributed as dist
-# from torch.utils.tensorboard import SummaryWriter
-import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from datasets import load_dataset
@@ -75,6 +73,9 @@ parser.add_argument("--scheduler", action="store_true",
                     help="Whether to use a warmup schedule or not.")
 
 parser.add_argument("--config", type=str, default="experiment_config.yml",
+                    help="Experiment configuration.")
+
+parser.add_argument("--wandb", type=str, default="online",
                     help="Experiment configuration.")
 
 args = parser.parse_args()
@@ -219,7 +220,7 @@ model = DDP(model, device_ids=[rank], output_device=rank)
 
 criterion = nn.CrossEntropyLoss()
 # optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
-optimizer = optim.AdamW(model.parameters(), lr=experiment_config["lr"], weight_decay=1e-5)
+optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
 scheduler = None
 
 if args.scheduler:
@@ -345,26 +346,6 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             sns.heatmap(attn_map.detach().cpu().numpy(), vmin=-.12, vmax=.12)
             plt.savefig(f"./heat/{experiment_name}_layer0_inprojweight_{global_step}.png")
             plt.close()
-            for i in range(6):
-                #     print("in_proj_weight", model.module.transformer_encoder.layers[i].self_attn.in_proj_weight.mean())
-                #     print("in_proj_bias", model.module.transformer_encoder.layers[i].self_attn.in_proj_bias.mean())
-                #     print("out_proj weight", model.module.transformer_encoder.layers[i].self_attn.out_proj.weight.mean())
-                #     print("out_proj bias", model.module.transformer_encoder.layers[i].self_attn.out_proj.weight.mean())
-                    
-                #     print("linear1 weight", model.module.transformer_encoder.layers[i].linear1.weight.mean())
-                #     print("linear1 bias", model.module.transformer_encoder.layers[i].linear1.bias.mean())
-                #     print("linear2 weight", model.module.transformer_encoder.layers[i].linear2.weight.mean())
-                #     print("linear2 bias", model.module.transformer_encoder.layers[i].linear2.bias.mean())
-                    
-                    print("in_proj_weight", model.module.transformer_encoder.layers[i].self_attn.in_proj_weight.detach().cpu().numpy().std())
-                    print("in_proj_bias", model.module.transformer_encoder.layers[i].self_attn.in_proj_bias.std())
-                    print("out_proj weight", model.module.transformer_encoder.layers[i].self_attn.out_proj.weight.std())
-                    print("out_proj bias", model.module.transformer_encoder.layers[i].self_attn.out_proj.bias.std())
-                    
-                    # print("linear1 weight", model.module.transformer_encoder.layers[i].linear1.weight.std())
-                    # print("linear1 bias", model.module.transformer_encoder.layers[i].linear1.bias.std())
-                    # print("linear2 weight", model.module.transformer_encoder.layers[i].linear2.weight.std())
-                    # print("linear2 bias", model.module.transformer_encoder.layers[i].linear2.bias.std())
 
         total_loss += loss.item()
         # Logging
@@ -380,8 +361,6 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 logger.debug(f"epoch {epoch:3d} | {global_step:5d} batches | "
                             f"ms/batch {ms_per_batch:5.2f} | "
                             f"loss {train_loss:5.2f} | ppl {train_ppl:8.2f}")
-                # writer.add_scalar("loss/train", train_loss, global_step=global_step)
-                # writer.add_scalar("ppl/train", train_ppl, global_step=global_step)
                 run.log({"train_loss": train_loss, "train ppl": train_ppl})
             dist.barrier()
             
@@ -400,8 +379,6 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 print(test_seq)
                 logger.info(f"validation loss {float(val_loss):5.2f} | "
                             f"validation ppl {val_ppl:8.2f}")
-                # writer.add_scalar("loss/val", val_loss, global_step=global_step)
-                # writer.add_scalar("ppl/val", val_ppl, global_step=global_step)
                 run.log({"validation_loss": val_loss, "val ppl": val_ppl})
                 
             global best_val_loss
@@ -490,20 +467,12 @@ if rank == 0:
                     project="GenomicBottleneck", 
                     group="wikipedia", 
                     config=run_config, 
-                    # mode=args.wandb,
+                    mode=args.wandb,
                     dir=base_config["wandb_dir"],
                     # id=args.wandb_id,
                     name=run_name)
 
     run.log({"validation_loss": val_loss, "val ppl": val_ppl})
-    
-    # writer = SummaryWriter(log_dir=log_dir,
-    #                         comment=run_name,
-    #                         filename_suffix=run_name,
-    #                         flush_secs=60)
-    # writer.add_text("global/config", str(run_config))
-    # writer.add_scalar("loss/val", val_loss, global_step=global_step)
-    # writer.add_scalar("ppl/val", val_ppl, global_step=global_step)
 
 
 # Actual training loop
@@ -526,7 +495,5 @@ for epoch in range(EPOCHS):
 # test_ppl = np.exp(test_loss) # word-level PPL
 # logger.info(f"End of training | test loss {test_loss:5.2f} | test ppl {test_ppl:8.2f}")
 dist.destroy_process_group()
-# writer.flush()
-# writer.close()
 run.finish()
 

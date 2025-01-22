@@ -16,7 +16,7 @@ ceil = lambda x: np.ceil(x).astype(np.int32)
 
 class GenomicBottleNet(nn.Module):
     """
-    Improved version of the variable-length Gnet that uses a for-loop for 
+    Improved version of the variable-length g-net that uses a `for`-loop for 
     initialization.
     
     Args:
@@ -53,6 +53,7 @@ class GenomicBottleNet(nn.Module):
             x = self.activation_fn(layer(x))
         x = self.batchnorm(x)
         x = self.layers[-1](x) # no non-linearity on the last layer
+        # NOTE: Do not touch output norm! Carfully computed by hand...
         return x * torch.tensor(2.) * self.output_scale
                 
 
@@ -62,6 +63,16 @@ GNetLayerTuple = Tuple[Tensor, Sequence[GenomicBottleNet], Sequence[int], float]
 def square_conv2d_gnet_layer(param: Tensor, 
                             hidden_dim: int, 
                             gnet_batchsize: int) -> GNetLayerTuple:   
+    """_summary_
+
+    Args:
+        param (Tensor): _description_
+        hidden_dim (int): _description_
+        gnet_batchsize (int): _description_
+
+    Returns:
+        GNetLayerTuple: _description_
+    """
     kernel_size = param.shape[2]*param.shape[3]
 
     tile_size = ceil(np.sqrt(gnet_batchsize//kernel_size))
@@ -96,8 +107,26 @@ def square_conv2d_gnet_layer(param: Tensor,
 def square_default_gnet_layer(param: Tensor, 
                             hidden_dim: int,  
                             gnet_batchsize: int) -> GNetLayerTuple:
-    # Calculates the number of square tiles of size `gnet_batchsize` we need to
-    # completely cover the weight matrix
+    """
+    Calculates the number of square tiles of size `gnet_batchsize` we need to
+    completely cover the weight matrix. This function is usually used to initialize
+    dense layers of multi-layer perceptrons. It automatically subdivides the weight
+    matrix into square tiles the contain at most `gnet_batchsize` weights. 
+    It also automatically computes the encoding of every single position of the 
+    a weight in the square tiles. Since the size of all tiles is the same, we 
+    reuse this encoding.
+
+    Args:
+        param (Tensor): Parameter, i.e. weight matrix that we wish to compress/
+            predict using a genomic network.
+        hidden_dim (int): Size of the hidden dimension of the g-net(s) that predict
+            the weight matrix.
+        gnet_batchsize (int): Maximum size of a single square tile.
+
+    Returns:
+        GNetLayerTuple: A tuple that contains the encoding of the weight positions,
+            the genomic networks, the shape of a single tile and the scale of the outputs.
+    """
     tile_size = ceil(np.sqrt(gnet_batchsize))
     tile_shape = (tile_size, tile_size)
     num_row_tiles = ceil(param.shape[0]/tile_size)
@@ -128,10 +157,22 @@ def square_default_gnet_layer(param: Tensor,
 def square_qkv_gnet_layer(param: Tensor, 
                     hidden_dim: int, 
                     gnet_batchsize: int) -> GNetLayerTuple:
+    """_summary_
+    TODO: reimplement this with the separation of the q,k, and v part of the matrix
+    because otherwise we might get weird correlations...
+
+    Args:
+        param (Tensor): _description_
+        hidden_dim (int): _description_
+        gnet_batchsize (int): _description_
+
+    Returns:
+        GNetLayerTuple: _description_
+    """
     # Subdivide the attention weight matrix in three similar parts Wq, Wk, Wv
     tile_size = ceil(np.sqrt(gnet_batchsize))
     tile_shape = (tile_size, tile_size)
-    num_row_tiles = ceil(param.shape[0]/tile_size)
+    num_row_tiles = ceil(param.shape[0]/tile_size//3)
     num_col_tiles = ceil(param.shape[1]/tile_size)
     
     # Treat 2D weight as fully connected
@@ -139,7 +180,7 @@ def square_qkv_gnet_layer(param: Tensor,
     num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
     encoding_type = (EncodingType.BINARY, EncodingType.BINARY)
     
-    row_col_encoding = make_row_col_encoding(tile_shape,
+    row_col_encoding = make_row_col_encoding(tile_shape, 
                                             encoding_type, 
                                             num_encoding_bits)
     num_inputs = row_col_encoding.shape[-1]
@@ -151,6 +192,6 @@ def square_qkv_gnet_layer(param: Tensor,
  
     gnet_sizes = (num_inputs, hidden_dim, 1)
     gnets = [GenomicBottleNet(gnet_sizes, output_scale) 
-            for _ in range(num_row_tiles*num_col_tiles)]     # add 3*
+            for _ in range(3*num_row_tiles*num_col_tiles)]     # add 3*
     
     return row_col_encoding, gnets, tile_shape, output_scale
