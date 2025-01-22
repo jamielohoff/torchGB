@@ -34,10 +34,9 @@ torchGB
 =======
 
 
-    Add a short description here!
+    torchGB is a highly parallel PyTorch implementation of the Genomic Bottleneck
+    for many different architectures such as CNNs and Transformers.
 
-
-A longer description of your project goes here...
 
 
 .. _pyscaffold-notes:
