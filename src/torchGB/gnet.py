@@ -6,9 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .utils import (make_row_col_encoding,
-                    get_tile_size, 
-                    EncodingType)
+from .utils import make_row_col_encoding, EncodingType
 
 
 ceil = lambda x: np.ceil(x).astype(np.int32)

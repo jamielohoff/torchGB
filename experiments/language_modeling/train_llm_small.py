@@ -21,12 +21,8 @@ from transformers import AutoTokenizer
 import seaborn as sns
 
 from torchGB import GenomicBottleneck
-from torchGB.lamb import Lamb
 from _transformer import GPT, generate_square_subsequent_mask, predict_sequence
-from utils import (get_dataloader, 
-                    load_model_layers, 
-                    load_config, 
-                    commit_to_experiments_branch)
+from utils import (get_dataloader, load_model_layers, load_config, commit_to_experiments_branch)
 
 parser = argparse.ArgumentParser()
 
@@ -115,13 +111,13 @@ base_config = load_config("config/base_config.yml")
 prefix = base_config["data_dirs"]["prefix"]
 data_dir = prefix + base_config["data_dirs"][args.language]
 logger.debug(f"Data directory: {data_dir}")
-cache_dir = base_config["cache_dir"]
+cache_dir = base_config["dirs"]["cache"]
 logger.debug(f"Cache directory: {cache_dir}")
 
 
 # Commit the current codebase to the experiments branch
 if rank == 0 and args.no_commit:
-    project_root = base_config["project_root_dir"]
+    project_root = base_config["dirs"]["project_root"]
     logger.info(f"Committing {project_root} on branch `experiments`")
     commit_hash = commit_to_experiments_branch(project_root)
 else:
@@ -147,9 +143,9 @@ else:
 
 # Set the model and gnet checkpoint paths
 fname = experiment_name + "_gnets_" + args.language + ".pth"
-GNET_CHCKPT_PATH  = os.path.join(base_config["save_gnets_dir"], fname)
+GNET_CHCKPT_PATH  = os.path.join(base_config["dirs"]["save_gnets"], fname)
 fname = experiment_name + "_model_" + args.language + ".pth"
-MODEL_CHCKPT_PATH  = os.path.join(base_config["save_model_dir"], fname)
+MODEL_CHCKPT_PATH  = os.path.join(base_config["dirs"]["save_model"], fname)
 
 
 # Check if the files already exist
@@ -162,64 +158,58 @@ if rank == 0 and args.checkpoint:
 
 # Load and create datasets
 train_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
-                            cache_dir=cache_dir, 
-                            split="train[:95%]")
+                             cache_dir=cache_dir, split="train[:95%]"
+                            )
 
 val_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
-                            cache_dir=cache_dir, 
-                            split="train[95%:96%]")
+                           cache_dir=cache_dir, split="train[95%:96%]"
+                          )
 val_dataset = val_dataset.take(experiment_config["val_dataset_len"]//world_size)
 
 test_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
-                            cache_dir=cache_dir,
-                            split="train[95%:96%]")
+                            cache_dir=cache_dir, split="train[95%:96%]"
+                           )
 
 # Initialize the tokenizer
-tokenizer_path = os.path.join(base_config["tokenizer_dir"], "wikipedia_" + args.language)
+tokenizer_path = os.path.join(base_config["dirs"]["tokenizer"], "wikipedia_" + args.language)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 logger.debug(f"Vocab size: {tokenizer.vocab_size}")
 
 
 def tokenize_function(element):
-    outputs = tokenizer(element["text"],
-                        truncation=True,
-                        max_length=SEQ_LEN+1,
-                        return_overflowing_tokens=True,
-                        return_length=True)
+    outputs = tokenizer(element["text"], truncation=True, max_length=SEQ_LEN+1,
+                        return_overflowing_tokens=True, return_length=True
+                       )
+    
     input_batch = []
     for length, input_ids in zip(outputs["length"], outputs["input_ids"]):
         if length == SEQ_LEN+1: # Drops all sentences that are not long enough...
             input_batch.append(input_ids)
     return {"input_ids": input_batch}
 
+
 rm_cols = train_dataset.column_names
-tokenized_train_dataset = train_dataset.map(tokenize_function, 
-                                            batched=True, 
-                                            num_proc=16,
-                                            remove_columns=rm_cols)
+tokenized_train_dataset = train_dataset.map(tokenize_function, batched=True, 
+                                            num_proc=16, remove_columns=rm_cols)
 
-tokenized_val_dataset = val_dataset.map(tokenize_function, 
-                                        batched=True, 
-                                        num_proc=16,
-                                        remove_columns=rm_cols)
+tokenized_val_dataset = val_dataset.map(tokenize_function, batched=True, 
+                                        num_proc=16, remove_columns=rm_cols)
 
-tokenized_test_dataset = test_dataset.map(tokenize_function, 
-                                        batched=True, 
-                                        num_proc=16,
-                                        remove_columns=rm_cols)
+tokenized_test_dataset = test_dataset.map(tokenize_function, batched=True, 
+                                          num_proc=16, remove_columns=rm_cols)
 
 
 num_batches = len(tokenized_train_dataset)*EPOCHS//(BATCHSIZE*world_size) + 1
 logger.debug(f"# batches in train dataset {num_batches}")
 
-train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, BATCHSIZE, stateful=True)
+train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, 
+                              BATCHSIZE, stateful=True)
 
 # Initialize the model and optimizers
 model = GPT(**experiment_config["model"]).to(rank)
 model = DDP(model, device_ids=[rank], output_device=rank)
 
 criterion = nn.CrossEntropyLoss()
-# optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
 optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
 scheduler = None
 
@@ -228,10 +218,8 @@ if args.scheduler:
     #                                         step_size_up=5000,
     #                                         step_size_down=50_000)
     # scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer,
-                                                max_lr=experiment_config["lr"], 
-                                                pct_start=0.2,
-                                                div_factor=250,
+    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=experiment_config["lr"], 
+                                                pct_start=0.2, div_factor=250,
                                                 final_div_factor=1000,
                                                 total_steps=num_batches)
 
@@ -248,11 +236,8 @@ if args.load_model is not None:
         SEED = state_dict["seed"]
         
         tokenized_train_dataset.shuffle(seed=SEED)
-        train_loader = get_dataloader(tokenized_train_dataset, 
-                                        rank, 
-                                        world_size, 
-                                        BATCHSIZE, 
-                                        stateful=True)
+        train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, 
+                                        BATCHSIZE, stateful=True)
         train_loader.load_state_dict(state_dict["dataloader"])
         
         logger.info(f"Loaded dataloader state from {args.load_model} "
@@ -376,7 +361,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             test_seq = predict_sequence("Star Trek", tokenizer, model, rank)
             
             if rank == 0:
-                print(test_seq)
+                logger.info("Output sequence: " + test_seq)
                 logger.info(f"validation loss {float(val_loss):5.2f} | "
                             f"validation ppl {val_ppl:8.2f}")
                 run.log({"validation_loss": val_loss, "val ppl": val_ppl})
@@ -448,7 +433,7 @@ if rank == 0:
 
     run_name = experiment_name + "_" + args.language
     
-    log_dir = os.path.join(base_config["log_dir"], run_name)
+    log_dir = os.path.join(base_config["dirs"]["log"], run_name)
     
     run_config = {"commit_hash": commit_hash,
                     "batchsize": BATCHSIZE,
@@ -460,7 +445,7 @@ if rank == 0:
                     **experiment_config,
                     **base_config}
     
-    wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
+    wandb.login(key=base_config["key"]["wandb"], 
                 host="https://wandb.fz-juelich.de")
     run_name = experiment_name + "_" + args.language
     run = wandb.init(entity="ja-lohoff", 
@@ -468,7 +453,7 @@ if rank == 0:
                     group="wikipedia", 
                     config=run_config, 
                     mode=args.wandb,
-                    dir=base_config["wandb_dir"],
+                    dir=base_config["dirs"]["wandb"],
                     # id=args.wandb_id,
                     name=run_name)
 

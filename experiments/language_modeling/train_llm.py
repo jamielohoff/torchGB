@@ -106,13 +106,13 @@ base_config = load_config("config/base_config.yml")
 prefix = base_config["data_dirs"]["prefix"]
 data_dir = prefix + base_config["data_dirs"][args.language]
 logger.debug(f"Data directory: {data_dir}")
-cache_dir = base_config["cache_dir"]
+cache_dir = base_config["dirs"]["cache"]
 logger.debug(f"Cache directory: {cache_dir}")
 
 
 # Commit the current codebase to the experiments branch
 if rank == 0 and args.no_commit:
-    project_root = base_config["project_root_dir"]
+    project_root = base_config["dirs"]["project_root"]
     logger.info(f"Committing current codebase under {project_root} to the `experiments` branch...")
     commit_hash = commit_to_experiments_branch(project_root)
 else:
@@ -138,9 +138,9 @@ else:
 
 # Set the model and gnet checkpoint paths
 fname = experiment_name + "_gnets_" + args.language + ".pth"
-GNET_CHCKPT_PATH  = os.path.join(base_config["save_gnets_dir"], fname)
+GNET_CHCKPT_PATH  = os.path.join(base_config["dirs"]["save_gnets"], fname)
 fname = experiment_name + "_model_" + args.language + ".pth"
-MODEL_CHCKPT_PATH  = os.path.join(base_config["save_model_dir"], fname)
+MODEL_CHCKPT_PATH  = os.path.join(base_config["dirs"]["save_model"], fname)
 
 
 # Check if the files already exist
@@ -384,7 +384,7 @@ if rank == 0:
 
     run_name = experiment_name + "_" + args.language
     
-    log_dir = os.path.join(base_config["log_dir"], run_name)
+    log_dir = os.path.join(base_config["dirs"]["log"], run_name)
     writer = SummaryWriter(log_dir=log_dir,
                             comment=run_name,
                             filename_suffix=run_name,

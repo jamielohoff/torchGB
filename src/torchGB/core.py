@@ -11,11 +11,8 @@ import torch.distributed as dist
 from torch import Tensor
 
 from .utils import assemble_matrix, cut_matrix, assemble_4d_kernel
-from .gnet import (GenomicBottleNet, 
-                    square_conv2d_gnet_layer,
-                    square_default_gnet_layer, 
-                    square_qkv_gnet_layer,
-                    ceil)
+from .gnet import (GenomicBottleNet, ceil, square_conv2d_gnet_layer, 
+                    square_qkv_gnet_layer, square_default_gnet_layer)
 
 
 @dataclass
@@ -81,7 +78,7 @@ class GenomicBottleneck(nn.Module):
                 num_batches: int = 0,
                 hidden_dim: int = 32, 
                 lr: float = 0.001,
-                gnet_batchsize: int = 10000,
+                gnet_batchsize: int = 10_000,
                 ignore_layers: Sequence[str] = []) -> None:
         super(GenomicBottleneck, self).__init__()             
         self.model = model
@@ -103,6 +100,8 @@ class GenomicBottleneck(nn.Module):
                     # that removes the bias towards the first device
                     device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
                     load_per_rank[device_id] += param.data.numel()
+                    
+                    # TODO make this more beautiful
                     
                     if device_id == dist.get_rank():
                         if isinstance(mod, nn.Conv2d):
@@ -402,7 +401,8 @@ class GenomicBottleneck(nn.Module):
         gnets = [gnet.to(device_id) for gnet in gnets]
         row_col_encodings = row_col_encodings.to(device_id)
         
-        num_layers = len(gnets[0].sizes)
+        num_layers = len(gnets[0].sizes) # number of layers in a gnet
+        print("Num ")
         # NOTE: Do not touch! Normalization has been carefully computed...
         _lr = self.lr / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5
 
