@@ -2,17 +2,26 @@
 
 API
 ===
+API documentation of the parallelized version of 
 
-.. autosummary::
-   :toctree: generated
-
-   torchGB
+====
+Core
+====
 
 .. automodule:: torchGB.core
    :members:
 
+=====================
+Genomic Network Types
+=====================
+
 .. automodule:: torchGB.gnet
    :members:
+
+
+=========
+Utilities
+=========
 
 .. automodule:: torchGB.utils
    :members:
