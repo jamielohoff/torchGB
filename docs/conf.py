@@ -19,6 +19,8 @@ __location__ = os.path.dirname(__file__)
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 sys.path.insert(0, os.path.join(__location__, "../src"))
+sys.path.insert(0, os.path.abspath('../'))
+sys.path.insert(0, os.path.abspath('.'))
 
 # -- Run sphinx-apidoc -------------------------------------------------------
 # This hack is necessary since RTD does not issue `sphinx-apidoc` before running
@@ -43,7 +45,7 @@ except FileNotFoundError:
 try:
     import sphinx
 
-    cmd_line = f"sphinx-apidoc --implicit-namespaces -f -o {output_dir} {module_dir}"
+    cmd_line = f"sphinx-apidoc -d --implicit-namespaces -f -o {output_dir} {module_dir}"
 
     args = cmd_line.split(" ")
     if tuple(sphinx.__version__.split(".")) >= ("1", "7"):
@@ -73,6 +75,8 @@ extensions = [
     "sphinx.ext.mathjax",
     "sphinx.ext.napoleon",
 ]
+
+napoleon_google_docstring = True
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
