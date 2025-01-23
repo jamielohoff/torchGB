@@ -33,6 +33,7 @@ Contents
    :maxdepth: 2
 
    Overview <readme>
+   API <api>
    Contributions & Help <contributing>
    License <license>
    Authors <authors>
