@@ -12,6 +12,7 @@ Contents
 
     Overview <readme>
     Usage <usage>
+    Adding new layer-types <new_layer>
     API <api/modules>
     Contributions & Help <contributing>
     Authors <authors>
