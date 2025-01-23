@@ -11,7 +11,7 @@ Contents
    :maxdepth: 2
 
     Overview <readme>
-    API <source/torchGB>
+    API <api/modules>
     Contributions & Help <contributing>
     Authors <authors>
 
