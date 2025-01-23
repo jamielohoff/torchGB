@@ -4,9 +4,6 @@ torchGB
 
 This is the documentation of **torchGB**.
 
-.. automodule:: torchGB
-   :members:
-
 .. note::
 
     This is the main page of your project's `Sphinx`_ documentation.
@@ -32,13 +29,12 @@ Contents
 .. toctree::
    :maxdepth: 2
 
-   Overview <readme>
-   API <api>
-   Contributions & Help <contributing>
-   License <license>
-   Authors <authors>
-   Changelog <changelog>
-   Module Reference <api/modules>
+    Overview <readme>
+    API <api>
+    Contributions & Help <contributing>
+    Module Reference <api/modules>
+    License <license>
+    Authors <authors>
 
 
 Indices and tables
