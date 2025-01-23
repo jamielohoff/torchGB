@@ -35,6 +35,7 @@ Contents
     Module Reference <api/modules>
     License <license>
     Authors <authors>
+    torchGB <source/torchGB>
 
 
 Indices and tables
