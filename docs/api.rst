@@ -2,3 +2,7 @@
    :toctree: generated
 
    torchGB
+
+..automodule:: torchGB
+   :members:
+

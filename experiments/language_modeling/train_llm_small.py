@@ -121,7 +121,7 @@ if rank == 0 and args.no_commit:
     logger.info(f"Committing {project_root} on branch `experiments`")
     commit_hash = commit_to_experiments_branch(project_root)
 else:
-    commit_hash = "test"
+    commit_hash = "placeholder_hash"
 
 
 # Determine mode of the experiment and set name

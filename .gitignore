@@ -76,4 +76,7 @@ slicing_config.yml
 *.slurm
 **/gnet/
 **/runs/
+**/output/
 *.png
+*.out
+*.err
