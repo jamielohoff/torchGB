@@ -38,7 +38,7 @@ torchGB
 What is **torchGB**?
 ================
 
-**torchGB** is a highly parallel PyTorch implementation of the genomic bottleneck
+**torchGB** is a highly parallel PyTorch implementation of the [genomic bottleneck](https://www.pnas.org/doi/abs/10.1073/pnas.2409160121)
 for many different architectures such as CNNs and Transformers. The genomic 
 bottleneck is in essence an input- **independent** hypernetwork that predicts the
 parameters/weights of the phenotype network, i.e. the model we want to compress.
