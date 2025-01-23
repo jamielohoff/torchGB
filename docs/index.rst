@@ -11,6 +11,7 @@ Contents
    :maxdepth: 2
 
     Overview <readme>
+    Usage <usage>
     API <api/modules>
     Contributions & Help <contributing>
     Authors <authors>

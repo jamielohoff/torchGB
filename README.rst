@@ -4,9 +4,6 @@
     .. image:: https://api.cirrus-ci.com/github/<USER>/torchGB.svg?branch=main
         :alt: Built Status
         :target: https://cirrus-ci.com/github/<USER>/torchGB
-    .. image:: https://readthedocs.org/projects/torchGB/badge/?version=latest
-        :alt: ReadTheDocs
-        :target: https://torchGB.readthedocs.io/en/stable/
     .. image:: https://img.shields.io/coveralls/github/<USER>/torchGB/main.svg
         :alt: Coveralls
         :target: https://coveralls.io/r/<USER>/torchGB
@@ -23,19 +20,38 @@
         :alt: Twitter
         :target: https://twitter.com/torchGB
 
-.. image:: https://img.shields.io/badge/-PyScaffold-005CA0?logo=pyscaffold
-    :alt: Project generated with PyScaffold
-    :target: https://pyscaffold.org/
-
-|
 
 =======
 torchGB
 =======
 
+.. image:: https://readthedocs.org/projects/torchGB/badge/?version=latest
+    :alt: ReadTheDocs
+    :target: https://torchGB.readthedocs.io/
 
-    torchGB is a highly parallel PyTorch implementation of the Genomic Bottleneck
-    for many different architectures such as CNNs and Transformers.
+.. image:: https://img.shields.io/badge/-PyScaffold-005CA0?logo=pyscaffold
+    :alt: Project generated with PyScaffold
+    :target: https://pyscaffold.org/
+
+
+
+What is torchGB?
+================
+
+**torchGB** is a highly parallel PyTorch implementation of the genomic bottleneck
+for many different architectures such as CNNs and Transformers. The genomic 
+bottleneck is in essence an input-**independent** hypernetwork that predicts the
+parameters of 
+
+
+Quick Start
+===========
+
+
+
+Installation
+============
+
 
 
 
