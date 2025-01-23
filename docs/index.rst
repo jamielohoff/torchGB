@@ -4,6 +4,9 @@ torchGB
 
 This is the documentation of **torchGB**.
 
+.. automodule:: torchGB
+   :members:
+
 .. note::
 
     This is the main page of your project's `Sphinx`_ documentation.
