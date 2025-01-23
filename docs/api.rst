@@ -1,8 +1,12 @@
+===
+API
+===
+
 .. autosummary::
    :toctree: generated
 
    torchGB
 
-..automodule:: torchGB
+.. automodule:: torchGB
    :members:
 
