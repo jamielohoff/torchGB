@@ -399,7 +399,7 @@ if rank == 0:
                   **base_config}
     
     wandb.login(key=base_config["accounts"]["wandb_key"], 
-                host=base_config["accounts"]["address"])
+                host=base_config["accounts"]["wandb_address"])
     
     run_name = experiment_name + "_" + args.language
     log_dir = os.path.join(base_config["dirs"]["log"], run_name)

@@ -402,7 +402,6 @@ class GenomicBottleneck(nn.Module):
         row_col_encodings = row_col_encodings.to(device_id)
         
         num_layers = len(gnets[0].sizes) # number of layers in a gnet
-        print("Num ")
         # NOTE: Do not touch! Normalization has been carefully computed...
         _lr = self.lr / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5
 

@@ -38,6 +38,7 @@ distributed data parallelism out of the box with ``torch.distributed`` library.
 It is however sufficient to implement your model so that it works on a single 
 node. **torchGB** takes care of the rest, but it requires some adjustments to the
 training scripts. We start by additionally importing the parallelization library:
+
 ..  code-block:: python
     :caption: Required imports
 
@@ -66,9 +67,9 @@ model in the ``GenomicBottleneck`` class:
 
 ..  code-block:: python
     :caption: Wrapping the model in a genomic bottleneck
+
     model = GPT(**experiment_config["model"]).to(rank)
     model = DDP(model, device_ids=[rank], output_device=rank)
-    # ...
     gnets = GenomicBottleneck(model, num_batches, **experiment_config["gnets"])
 
 
@@ -129,8 +130,8 @@ instead of the usual ``python`` binary. Here is an example launch:
 
 Note that it is imperative to use the ``--nproc_per_node=4`` argument to enable
 the proper distribution of the workload. To learn more about ``torch.distributed``,
-look `here <https://pytorch.org/docs/stable/distributed.html>`.
-For ``torchrun`` specifically, check out `this link <https://pytorch.org/docs/stable/elastic/run.html>`.
+look `here <https://pytorch.org/docs/stable/distributed.html>`_.
+For ``torchrun`` specifically, check out `this link <https://pytorch.org/docs/stable/elastic/run.html>`_.
 
 
 Installation
