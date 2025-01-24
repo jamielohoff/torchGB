@@ -23,12 +23,21 @@ torchGB
 
 
 What is **torchGB**?
-================
+====================
 
 **torchGB** is a highly parallel PyTorch implementation of the genomic bottleneck
 for many different architectures such as CNNs and Transformers. The genomic 
 bottleneck is in essence an input- **independent** hypernetwork that predicts the
 parameters/weights of the phenotype network, i.e. the model we want to compress.
+
+
+Terminology
+===========
+The **p-net** or phenotype network is the model that we intend to compress. A
+rough analogy in neuroscience is the brain of an animal or human. The **g-net**
+or genomic network is the model or rather an assortment of models that compress
+the weights of the p-net, i.e. the hypernetwork. You can think of it as the 
+genome of a animal or human which roughly encodes the base wiring patterns.
 
 
 Quick Start
@@ -145,6 +154,29 @@ There no **PyPI** package available yet. The project has to be installed with
 
     pip install git+https://github.com/jamielohoff/torchGB.git
 
+
+Clearly the project also needs the most recent version of PyTorch installed. You
+can find it `here <>`_. 
+
+
+Reproducibility
+===============
+To reproduce the results in the paper and run the scripts in the ``experiments``
+folder, you additionally need to install the following packages:
+
++-------------+---------+
+|package      |version  |
++-------------+---------+
+|torch        |>= 2.5.1 |
+|seaborn      |>= 0.13.2|
+|matplotlib   |>= 3.10.0|
+|wandb        |>= 0.19.4|
+|tqdm         |>= 4.67.1|
+|transformers |>= 4.48.1|
+|datasets     |>= 3.2.0 |
+|loguru       |>= 0.7.3 |
+|torchdata    |>= 0.10.1|
++-------------+---------+
 
 .. _pyscaffold-notes:
 
