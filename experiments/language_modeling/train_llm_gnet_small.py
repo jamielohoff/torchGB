@@ -183,6 +183,7 @@ train_loader = get_dataloader(tokenized_train_dataset, rank, world_size,
 # Initialize the model and optimizers
 model = GPT(**experiment_config["model"]).to(rank)
 model = DDP(model, device_ids=[rank], output_device=rank)
+gnets = GenomicBottleneck(model, num_batches, **experiment_config["gnets"])
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
@@ -235,9 +236,6 @@ if args.load_model is not None:
 # Which layers to ignore when assigning gnets
 ignore_layers = [f".{l}." for l in args.ignore_layers.split(",")]
 experiment_config["gnets"]["ignore_layers"] += ignore_layers
-
-
-gnets = GenomicBottleneck(model, num_batches, **experiment_config["gnets"])
 
 
 # Load G-Net weights if applicable and predict the weights
