@@ -21,7 +21,6 @@ torchGB
     :target: https://pyscaffold.org/
 
 
-
 What is **torchGB**?
 ====================
 
@@ -123,6 +122,7 @@ The key here is the ``.predict_weights()`` method which automatically uses the
 g-nets to compute the weights of the p-net, which then is used to make predictions,
 compute errors and then backpropagate the errors through both p-net and g-nets.
 
+
 Running a Program
 =================
 **torchGB** relies on a highly parallelized implementation that distributes the
@@ -156,7 +156,7 @@ There no **PyPI** package available yet. The project has to be installed with
 
 
 Clearly the project also needs the most recent version of PyTorch installed. You
-can find it `here <>`_. 
+can find it `here <https://pytorch.org>`_ and install it with ``pip``. 
 
 
 Reproducibility
