@@ -12,12 +12,12 @@ class EncodingType(Enum):
     BINARY = 1 # Binary code
 
 
-def tile_matrix(matrix: Tensor, row_size: int, col_size: int):
+def tile_matrix(matrix: Tensor, row_size: int, col_size: int) -> Tensor:
     """
     Return an array of shape (n, row_size, col_size) where
     n * row_size * col_size = arr.size
 
-    If arr is a 2D array, the returned array should look like n subblocks with
+    If `arr` is a 2D array, the returned array should look like `n` subblocks with
     each subblock preserving the "physical" layout of arr.
     
     Args:
@@ -32,6 +32,7 @@ def tile_matrix(matrix: Tensor, row_size: int, col_size: int):
     assert len(matrix.shape) == 2, "Input array must be 3D"
     assert h % row_size == 0, f"{h} rows is not evenly divisible by {row_size}"
     assert w % col_size == 0, f"{w} cols is not evenly divisible by {col_size}"
+    
     return (matrix.reshape(h // row_size, row_size, -1, col_size)
                     .swapaxes(1, 2)
                     .reshape(-1, row_size, col_size))
@@ -39,8 +40,9 @@ def tile_matrix(matrix: Tensor, row_size: int, col_size: int):
 
 def assemble_matrix(arr: Tensor, new_shape: Tuple[int, int]) -> Tensor:
     """
-    NOTE This is the inverse of tile_matrix. This function reassembles the 
-    original array from its tiled form. The input array must be 3D.
+    This function is the inverse of tile_matrix. This function reassembles the 
+    original array from its tiled form if the initial array was a 2D matrix. 
+    The input array must be 3D.
     
     Args:
         `arr` (Tensor): The input array in its tiled form.
@@ -62,8 +64,9 @@ def assemble_matrix(arr: Tensor, new_shape: Tuple[int, int]) -> Tensor:
 
 def assemble_4d_kernel(arr: Tensor, new_shape: Tuple[int, int, int, int]) -> Tensor:
     """
-    NOTE This is the inverse of tile_matrix. This function reassembles the 
-    original array from its tiled form. The input array must be 3D.
+    This fucntion is the inverse of tile_matrix. This function reassembles the 
+    original array from its tiled form if the original array was a 3D tensor, e.g.
+    in the case of a convolution. The input array must be 4D.
     
     Args:
         `arr` (Tensor): The input array in its tiled form.

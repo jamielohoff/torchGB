@@ -6,14 +6,18 @@ from torch import nn, Tensor
 from torch.nn import TransformerEncoder, TransformerEncoderLayer, Transformer
 
 
-def generate_square_subsequent_mask(sz: int):
+def generate_square_subsequent_mask(size: int) -> Tensor:
     """
-    Generates an upper-triangular matrix of -inf, with zeros on diag.
+    Generates an upper-triangular matrix of `-inf`, with zeros on diagonal. This
+    mask is then used for autoregressive generation of text in the GPT-2 model.
     
     Args:
-        `sz` (int): Size of the square matrix.
+        `size` (int): Size of the square matrix.
+        
+    Returns
+        Tensor: Upper-triangular matrix of `-inf` values.
     """
-    return torch.triu(torch.ones(sz, sz) * float("-inf"), diagonal=1)
+    return torch.triu(torch.ones(size, size) * float("-inf"), diagonal=1)
 
 
 class PositionalEncoding(nn.Module):
@@ -27,9 +31,12 @@ class PositionalEncoding(nn.Module):
         `d_model` (int): the number of expected features in the input (required).
         `dropout` (float): the dropout value (default=0.1).
         `max_len` (int): the maximum length of the input sequences (default=5000).
+        
+    Returns:
+        Tensor: 
     """
 
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000) -> None:
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
@@ -61,28 +68,19 @@ class GPT(nn.Module):
         `ff_dim` (int): Dimension of the feed-forward MLP.
         `num_layers` (int): Number of transformer layers.
         `dropout` (float): Dropout rate.
-        `tie_weights` (bool): Whether to tie the weights of 
-            the decoder and the embedding layer.
+        `tie_weights` (bool): Whether to tie the weights of the decoder layer 
+            and the embedding layer.
     """
-    def __init__(self, 
-                seq_len: int = 512,
-                vocab_size: int = 50257, 
-                embedding_dim: int = 768, 
-                num_heads: int = 12, 
-                ff_dim: int = 3072,
-                num_layers: int = 12, 
-                dropout: float = 0.1,
+    def __init__(self, seq_len: int = 512, vocab_size: int = 50257, 
+                embedding_dim: int = 768, num_heads: int = 12, 
+                ff_dim: int = 3072, num_layers: int = 12, dropout: float = 0.1,
                 tie_weights: bool = True) -> None:
         super().__init__()
         self.pos_encoder = PositionalEncoding(embedding_dim, dropout)
         self.dropout = nn.Dropout(dropout)
-        encoder_layers = TransformerEncoderLayer(embedding_dim, 
-                                                num_heads, 
-                                                ff_dim, 
-                                                dropout,
-                                                norm_first=False,
-                                                batch_first=True, 
-                                                activation=F.gelu)
+        encoder_layers = TransformerEncoderLayer(embedding_dim, num_heads, 
+                                                ff_dim, dropout,norm_first=False,
+                                                batch_first=True, activation=F.gelu)
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers)
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.embedding_dim = torch.tensor([embedding_dim])
@@ -94,7 +92,12 @@ class GPT(nn.Module):
             self.decoder.weight = self.embedding.weight # Tie weights
         
     def init_weights(self, module: nn.Module) -> None:
-        # GPT-2 init as described in paper
+        """
+        GPT-2 init as described in paper
+
+        Args:
+            module (nn.Module): _description_
+        """
         if isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, std=0.02)
             
@@ -134,12 +137,26 @@ class GPT(nn.Module):
         return self.decoder(src)
     
 
-def generate_sequence(model, sequence, device, seq_size=32, k=20, temperature=0.9):       
+def generate_sequence(model: nn.Module, sequence: Tensor, device: torch.device, 
+                      seq_size: int = 32, k: int = 20, 
+                      temperature: float = 0.9) -> Tensor:       
+    """_summary_
+
+    Args:
+        model (nn.Module): _description_
+        sequence (Tensor): _description_
+        device (torch.device): _description_
+        seq_size (int, optional): _description_. Defaults to 32.
+        k (int, optional): _description_. Defaults to 20.
+        temperature (float, optional): _description_. Defaults to 0.9.
+
+    Returns:
+        Tensor: _description_
+    """
     sequence = sequence.unsqueeze(0)
     src_mask = generate_square_subsequent_mask(seq_size+sequence.size(1))
     for _ in range(seq_size):
         _src_mask = src_mask[:sequence.size(1), :sequence.size(1)].to(device)
-        # output_word = torch.argmax(model(sequence, _src_mask)[-1, :], dim=1)[-1:]
         with torch.no_grad():
             logits = model(sequence, _src_mask)[0, -1, :]
             topk = torch.topk(logits, k)
@@ -160,26 +177,25 @@ def predict_sequence(sentence, tokenizer, model, device, seq_size=32) -> str:
 
 # helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 class TokenEmbedding(nn.Module):
-    def __init__(self, vocab_size: int, emb_size):
+    """_summary_
+
+    Args:
+        nn (_type_): _description_
+    """
+    def __init__(self, vocab_size: int, emb_size) -> None:
         super(TokenEmbedding, self).__init__()
         self.embedding = nn.Embedding(vocab_size, emb_size)
         self.emb_size = emb_size
 
-    def forward(self, tokens: Tensor):
+    def forward(self, tokens: Tensor) -> Tensor:
         return self.embedding(tokens.long()) * np.sqrt(self.emb_size)
 
 
-# Seq2Seq Network
+# TODO: document (and use?) Seq2Seq Network
 class Seq2SeqTransformer(nn.Module):
-    def __init__(self,
-                 num_encoder_layers: int,
-                 num_decoder_layers: int,
-                 emb_size: int,
-                 nhead: int,
-                 src_vocab_size: int,
-                 tgt_vocab_size: int,
-                 dim_feedforward: int = 512,
-                 dropout: float = 0.1):
+    def __init__(self, num_encoder_layers: int, num_decoder_layers: int,
+                 emb_size: int, nhead: int, src_vocab_size: int, tgt_vocab_size: int,
+                 dim_feedforward: int = 512, dropout: float = 0.1) -> None:
         super(Seq2SeqTransformer, self).__init__()
         self.transformer = Transformer(d_model=emb_size,
                                        nhead=nhead,
@@ -190,30 +206,23 @@ class Seq2SeqTransformer(nn.Module):
         self.generator = nn.Linear(emb_size, tgt_vocab_size)
         self.src_tok_emb = TokenEmbedding(src_vocab_size, emb_size)
         self.tgt_tok_emb = TokenEmbedding(tgt_vocab_size, emb_size)
-        self.positional_encoding = PositionalEncoding(
-            emb_size, dropout=dropout)
+        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout)
 
-    def forward(self,
-                src: Tensor,
-                trg: Tensor,
-                src_mask: Tensor,
-                tgt_mask: Tensor,
-                src_padding_mask: Tensor,
-                tgt_padding_mask: Tensor,
-                memory_key_padding_mask: Tensor):
+    def forward(self, src: Tensor, trg: Tensor, src_mask: Tensor, 
+                tgt_mask: Tensor, src_padding_mask: Tensor,
+                tgt_padding_mask: Tensor, memory_key_padding_mask: Tensor) -> Tensor:
         src_emb = self.positional_encoding(self.src_tok_emb(src))
         tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg))
         outs = self.transformer(src_emb, tgt_emb, src_mask, tgt_mask, None,
                                 src_padding_mask, tgt_padding_mask, memory_key_padding_mask)
         return self.generator(outs)
 
-    def encode(self, src: Tensor, src_mask: Tensor):
+    def encode(self, src: Tensor, src_mask: Tensor) -> Tensor:
         return self.transformer.encoder(self.positional_encoding(
                             self.src_tok_emb(src)), src_mask)
 
-    def decode(self, tgt: Tensor, memory: Tensor, tgt_mask: Tensor):
-        return self.transformer.decoder(self.positional_encoding(
-                          self.tgt_tok_emb(tgt)), memory,
-                          tgt_mask)
+    def decode(self, tgt: Tensor, memory: Tensor, tgt_mask: Tensor) -> Tensor:
+        pos_enc = self.positional_encoding(self.tgt_tok_emb(tgt))
+        return self.transformer.decoder(pos_enc, memory, tgt_mask)
     
     
