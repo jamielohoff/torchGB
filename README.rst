@@ -56,25 +56,25 @@ g-nets evenly across the available hardware using the ``torch.distributed``
 library. Thus, launching the model requires the use of the ``torchrun`` binary
 instead of the usual ``python`` binary. Here is an example launch:
 
-.. codeblock:: bash
+.. code-block:: bash
     CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 train_llm_small.py \
     --gpus 1,2,3,4 --seed 42 --language en --batchsize 36 \
     --name test --no_commit --log_level DEBUG
 
 Note that it is imperative to use the ``--nproc_per_node=4`` argument to enable
 the proper distribution of the workload. To learn more about ``torch.distributed``,
-look ``here <https://pytorch.org/docs/stable/distributed.html>``
-For ``torchrun`` specifically, check out ``this link <https://pytorch.org/docs/stable/elastic/run.html>``
+look `here <https://pytorch.org/docs/stable/distributed.html>`.
+For ``torchrun`` specifically, check out `this link <https://pytorch.org/docs/stable/elastic/run.html>`.
 
 
 
 Installation
 ============
 
-There no PyPI_ package available yet. The project has to be installed with
+There no **PyPI** package available yet. The project has to be installed with
 ``pip`` directly from source using:
 
-.. codeblock:: python
+.. code-block:: python
     pip install git+https://github.com/jamielohoff/torchGB.git
 
 
