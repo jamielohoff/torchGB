@@ -79,8 +79,8 @@ class GPT(nn.Module):
         self.pos_encoder = PositionalEncoding(embedding_dim, dropout)
         self.dropout = nn.Dropout(dropout)
         encoder_layers = TransformerEncoderLayer(embedding_dim, num_heads, 
-                                                ff_dim, dropout,norm_first=False,
-                                                batch_first=True, activation=F.gelu)
+                                                 ff_dim, dropout, norm_first=False,
+                                                 batch_first=True, activation=F.gelu)
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers)
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.embedding_dim = torch.tensor([embedding_dim])
@@ -104,22 +104,22 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Linear):
             nn.init.normal_(module.weight, std=0.02)
             if module.bias is not None:
-                nn.init.normal_(module.bias, std=0.02) # nn.init.zeros_(module.bias) # 
+                nn.init.normal_(module.bias, std=0.02)
             
         elif isinstance(module, nn.TransformerEncoderLayer):
             nn.init.normal_(module.self_attn.in_proj_weight, std=0.02)
             if module.self_attn.in_proj_bias is not None:
-                nn.init.normal_(module.self_attn.in_proj_bias, std=0.02) # nn.init.zeros_(module.self_attn.in_proj_bias) #  
+                nn.init.normal_(module.self_attn.in_proj_bias, std=0.02)
             nn.init.normal_(module.self_attn.out_proj.weight, std=0.02)
             if module.self_attn.out_proj.bias is not None:
-                nn.init.normal_(module.self_attn.out_proj.bias, std=0.02) # nn.init.zeros_(module.self_attn.out_proj.bias) # 
+                nn.init.normal_(module.self_attn.out_proj.bias, std=0.02)
             
             nn.init.normal_(module.linear1.weight, std=0.02)
             if module.linear1.bias is not None:
-                nn.init.normal_(module.linear1.bias, std=0.02) # nn.init.zeros_(module.linear1.bias) # 
+                nn.init.normal_(module.linear1.bias, std=0.02)
             nn.init.normal_(module.linear2.weight, std=0.02)
             if module.linear2.bias is not None:
-                nn.init.normal_(module.linear2.bias, std=0.02) # nn.init.zeros_(module.linear2.bias) # 
+                nn.init.normal_(module.linear2.bias, std=0.02) 
 
         
     def forward(self, src: Tensor, src_mask: Tensor) -> Tensor:

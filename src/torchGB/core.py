@@ -1,5 +1,5 @@
 import time
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Callable, Dict, Optional, Sequence, Tuple
 from dataclasses import dataclass
 
 import numpy as np
@@ -10,30 +10,56 @@ import torch.optim as optim
 import torch.distributed as dist
 from torch import Tensor
 
-from .utils import assemble_matrix, cut_matrix, assemble_4d_kernel
-from .gnet import (GenomicBottleNet, ceil, square_conv2d_gnet_layer, 
-                    square_qkv_gnet_layer, square_default_gnet_layer)
+from .gnet import GenomicBottleNet, ceil
+from .utils import cut_matrix, build_matrix, build_4d_kernel
+
+from .layers.attn_gnet import init_attn_gnet, build_attn_gnet_output
+from .layers.conv_gnet import init_conv2d_gnet, build_conv2d_gnet_output
+from .layers.linear_gnet import init_linear_gnet, build_linear_gnet_output
+from .layers import attn_gnet_layer, conv2d_gnet_layer, linear_gnet_layer
+
+
+# Stores how the compression is intended to work for different layer types
+gnet_types = {}
+
+def register_gnet_type(mod_type: nn.Module, init: Callable, assemble: Callable) -> None:
+    """
+    This function registers a new g-net type to be used in the Genomic Bottleneck.
+
+    Args:
+        type (nn.Module): _description_
+        init (Callable): _description_
+        assemble (Callable): _description_
+    """
+    global gnet_types
+    gnet_types[mod_type] = (init, assemble)
+    
+    
+# TODO registering does not work as intended yet
+register_gnet_type(nn.TransformerEncoder, init_attn_gnet, build_attn_gnet_output)
+# register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output)
+register_gnet_type(nn.Conv2d, init_conv2d_gnet, build_conv2d_gnet_output)
 
 
 @dataclass
 class GNetLayer:
     """
-    This class stores all the information about the G-Net for a specific layer.
+    This class stores all the information about the g-net for a specific layer.
     
     Args:
-        `name` (str): Name of the layer parameter predicted by the G-Net.
-        `rank` (int): Rank of the device where the G-Net is stored.
+        `name` (str): Name of the layer parameter predicted by the g-net.
+        `rank` (int): Rank of the device where the g-net is stored.
         `tile_shape` (Optional[Sequence[int, int]]): The shape of the tiles used 
             to predict the weights of the layer.
-        `gnets` (Sequence[GenomicBottleNet]): Sequence of G-Net models. 
+        `gnets` (Sequence[GenomicBottleNet]): Sequence of g-net models. 
             This is typically a list of MLPs.
         `optimizers` (Sequence[optim.Optimizer]): The optimizers used to train 
-            all the the G-Nets.
-        `gnet_input` (Tensor): The input to the G-Net. This is a 
+            all the the g-nets.
+        `gnet_input` (Tensor): The input to the g-net. This is a 
             constant tensor that is used to predict the new weights of the 
             layer. They encode the (i,j)-position of every weight in the 
             parameter matrix of the layer.
-        `weights` (Tensor): The weights predicted by the G-Net.
+        `weights` (Tensor): The weights predicted by the g-net.
         `grad_scale` (float): The scaling factor for the gradients.   
     """
     name: str
@@ -45,41 +71,61 @@ class GNetLayer:
     gnet_input: Optional[Sequence[Tensor]] = None
     weights: Optional[Tensor] = None
     grad_scale: Optional[float] = None
+    
+    
+@dataclass
+class GNetType:
+    """
+    TODO: write docstring
+
+    Args:
+        _type_: _description_
+    """
+    name: str
+    init: Callable
+    assemble: Callable
 
 
 class GenomicBottleneck(nn.Module):
     """
     The `GenomicBottleneck` class implements a hypernetwork that predicts all
     learnable weights matrices in a given neural network model. For every weight,
-    a G-Net is created that predicts the new weights of the layer.
-    When launched with the `torchrun -nproc_per_node='num_gpus'` command, every G-Net is 
-    stored on a different device to parallelize the computation. Furthermore,
-    every G-Net has its own optimizer.
+    a g-net is created that predicts the new weights of the layer.
+    The input of every g-net is the encoding of the position of a single weight, 
+    e.g. i,j in a matrix. These positions can be encoded in a binary fashion, i.e.
+    the weigth at position (8, 3) is encoded as (1000,0011). Other encoding types
+    are possible such as a one-hot encoding, but these scale badly.
+    These encodings of a single weight are then the input for the hypernetwork.
+    In case of an MLP, we have one input neuron per bit, i.e. in the above example
+    we have 8 input neurons and a single output neuron which predicts the weight.
+    Thus the g-net predicts the value of a single weight of the matrix, but we 
+    can parallelize the process by batching across the all the weights and
+    reshaping the resulting output into the weight tensor.
+    When launched with the `torchrun -nproc_per_node='num_gpus'` command, 
+    every g-net is stored on a different device to parallelize the computation. 
+    Furthermore, every g-net has its own optimizer.
     Gradients are backpropagated by first backpropagating the gradients through
     the `model` and then using them as seeds for further backpropagation through
-    the G-Nets.
+    the g-nets.
 
     Args:
         `model` (nn.Module): The neural network model.
         `num_batches` (int): The number of batches in the training loop.
-        `hidden_dim` (int): The size of the hidden layers in the G-Nets.
-        `lr` (float): The learning rate of the G-Nets.
+        `hidden_dim` (int): The size of the hidden layers in the g-nets.
+        `lr` (float): The learning rate of the g-nets.
         `gnet_batchsize` (int): The number of parameters per tile.
         `ignore_layers` (Optional[Sequence[str]]): A list of layer names and 
-            types that should not be predicted using a G-Net.
+            types that should not be predicted using a g-net.
     """
     lr: float
     num_batches: int
     model: nn.Module
     gnetdict: Dict[str, GNetLayer]
     
-    def __init__(self, 
-                model: nn.Module, 
-                num_batches: int = 0,
-                hidden_dim: int = 32, 
-                lr: float = 0.001,
-                gnet_batchsize: int = 10_000,
-                ignore_layers: Sequence[str] = []) -> None:
+    def __init__(self, model: nn.Module, num_batches: int = 0, 
+                 hidden_dim: int = 32, lr: float = 0.001, 
+                 gnet_batchsize: int = 10_000, 
+                 ignore_layers: Sequence[str] = []) -> None:
         super(GenomicBottleneck, self).__init__()             
         self.model = model
         self.lr = lr
@@ -89,8 +135,9 @@ class GenomicBottleneck(nn.Module):
         self.gnetdict = {}
         load_per_rank = np.zeros(dist.get_world_size()) 
            
+        # Iterate over all the modules in the model
         for name, mod in self.model.module.named_modules(): 
-            if (not isinstance(mod, nn.Linear)) and (not isinstance(mod, nn.Conv2d)):
+            if isinstance(mod, nn.LayerNorm) or isinstance(mod, nn.Dropout):
                 continue
             for pname, param in mod.named_parameters():    
                 _name = name + "." + pname 
@@ -101,46 +148,30 @@ class GenomicBottleneck(nn.Module):
                     device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
                     load_per_rank[device_id] += param.data.numel()
                     
-                    # TODO make this more beautiful
-                    
-                    if device_id == dist.get_rank():
-                        if isinstance(mod, nn.Conv2d):
-                            if "weight" in pname:
-                                out = square_conv2d_gnet_layer(param, 
-                                                                hidden_dim,
-                                                                gnet_batchsize)   
+                    # NOTE: Edit these lines in order to add a new layers for
+                    # compression or edit the way the current compression behavior
+                    gnet_type = gnet_types.get(type(mod))
+                    if gnet_type:
+                        # First index of compression behavior describes 
+                        # initialization of the g-net for this specific
+                        # layer type
+                        if device_id == dist.get_rank():
+                            out_fn = gnet_types[type(mod)][0]
+                            out = out_fn(pname, param, hidden_dim, 
+                                            gnet_batchsize)
+                            if out_fn:
                                 self._add_gnets(_name, device_id, param, *out)
-                                
-                        elif isinstance(mod, nn.TransformerEncoder):
-                            if "in_proj_weight" in pname:
-                                out = square_qkv_gnet_layer(param, 
-                                                            hidden_dim,
-                                                            gnet_batchsize) 
-
-                                self._add_gnets(_name, device_id, param, *out)
-                            elif "weight" in pname and len(param.shape) == 2:
-                                out = square_default_gnet_layer(param, 
-                                                                hidden_dim,
-                                                                gnet_batchsize) 
-                                self._add_gnets(_name, device_id, param, *out)
-                                        
-                        elif isinstance(mod, nn.Linear):     
-                            if "weight" in pname:                   
-                                # Treat everything else as fully connected                            
-                                out = square_default_gnet_layer(param, 
-                                                                hidden_dim,
-                                                                gnet_batchsize)
-                                self._add_gnets(_name, device_id, param, *out)
-                    else:
-                        self.gnetdict[_name] = GNetLayer(name=_name, rank=device_id)
+                            
+                        else:
+                            self.gnetdict[_name] = GNetLayer(name=_name, rank=device_id)
                     
     def __repr__(self) -> str:
-        output_str = f"G-Net parameters:\n"
+        output_str = f"g-net parameters:\n"
         for name in self.gnetdict.keys():
             gnets = self.gnetdict[name]
             output_str += f"Parameter={name}\n" \
                         f"Parameter shape={gnets.weights.shape}\n" \
-                        f"G-Net input shape={gnets.gnet_input.shape}\n\n"
+                        f"g-net input shape={gnets.gnet_input.shape}\n\n"
         return output_str
                                                                          
     def get_num_params_gnet(self) -> int:
@@ -149,7 +180,7 @@ class GenomicBottleneck(nn.Module):
         compute them separately and then sum them up with a all_reduce operation.
         
         Returns:
-            int: Cumulative number of parameters of all G-Nets.
+            int: Cumulative number of parameters of all g-nets.
         """
         num_params = torch.tensor(0).to(dist.get_rank()) 
         
@@ -169,17 +200,17 @@ class GenomicBottleneck(nn.Module):
         compute them separately and then sum them up with a all_reduce operation.
         
         Returns:
-            int: Cumulative number of parameters of which have no G-Nets attached.
+            int: Cumulative number of parameters of which have no g-nets attached.
         """
         return sum([param.numel() for pname, param in self.model.named_parameters()
                     if not pname in self.gnetdict.keys()])
     
     def compression(self) -> float:
         """
-        This function computes the compression ratio of the G-Net to the model.
+        This function computes the compression ratio of the g-net to the model.
 
         Returns:
-            float: Compression factor of the G-Net with respect to the model.
+            float: Compression factor of the g-net with respect to the model.
         """
         num_model_params = sum(p.numel() for p in self.model.parameters())
         num_gnet_params = self.get_num_params_gnet() 
@@ -190,10 +221,10 @@ class GenomicBottleneck(nn.Module):
                     
     def save(self, fname: str) -> None:
         """
-        Save the G-Nets from a checkpoint file.
+        Save the g-nets from a checkpoint file.
 
         Args:
-            `fname` (str): File to which we wish to write the weights of the G-Nets.
+            `fname` (str): File to which we wish to write the weights of the g-nets.
         """
         checkpoint = {}
 
@@ -223,13 +254,13 @@ class GenomicBottleneck(nn.Module):
                       
     def load(self, fname: str) -> None:
         """
-        Loads the G-Nets from a specified file.
-        This function loads the state dictionaries of the G-Nets and their corresponding
-        optimizers from a checkpoint file. It ensures that only the G-Nets corresponding
+        Loads the g-nets from a specified file.
+        This function loads the state dictionaries of the g-nets and their corresponding
+        optimizers from a checkpoint file. It ensures that only the g-nets corresponding
         to the current process rank are loaded.
 
         Args:
-            `fname` (str): File from which to load the G-Nets.
+            `fname` (str): File from which to load the g-nets.
         """
         checkpoint = torch.load(fname, map_location=torch.device("cpu"))
 
@@ -280,7 +311,7 @@ class GenomicBottleneck(nn.Module):
         """
         param_list = {i:[] for i in range(dist.get_world_size())}
         for name, mod in self.model.module.named_modules(): 
-            if (not isinstance(mod, nn.Linear)) and (not isinstance(mod, nn.Conv2d)):
+            if isinstance(mod, nn.LayerNorm) or isinstance(mod, nn.Dropout):
                 continue
             for pname, param in mod.named_parameters():    
                 _name = name + "." + pname 
@@ -293,50 +324,41 @@ class GenomicBottleneck(nn.Module):
                             new_weight_tile = gnet(gnet_input)
                             new_weight_tile = new_weight_tile.reshape(tile_shape)
                             new_weights.append(new_weight_tile)
-                        # TODO make this prettier
+                    
                         # Assemble the new weight tiles into the full weight matrix
                         new_weights = torch.stack(new_weights, dim=0)
                         
-                        if "in_proj_weight_" in _name:
-                            num_row_tiles = 3*ceil(param.shape[0]//3/tile_shape[0])
-                            num_col_tiles = ceil(param.shape[1]/tile_shape[1])
-                        else:
-                            num_row_tiles = ceil(param.shape[0]/tile_shape[0])
-                            num_col_tiles = ceil(param.shape[1]/tile_shape[1])
+                        # TODO fix issue here!
+                        # Second index of compression behavior describes 
+                        # assembly of the weight matrix predicted by
+                        # the g-nets
+                        gnet_type = gnet_types.get(type(mod))
+                        if gnet_type:
+                            weights_fn = gnet_type[1]
+                            new_weights = weights_fn(_name, param, new_weights, 
+                                                     tile_shape)
                             
-                        if isinstance(mod, nn.Conv2d):
-                            shape = (num_row_tiles*tile_shape[0], 
-                                        num_col_tiles*tile_shape[1], 
-                                        param.shape[2], 
-                                        param.shape[3])
-                            new_weights = assemble_4d_kernel(new_weights, shape)
-                            new_weights = cut_matrix(new_weights, param.shape)
-                        else:
-                            shape = (num_row_tiles*tile_shape[0], 
-                                    num_col_tiles*tile_shape[1])
-                            new_weights = assemble_matrix(new_weights, shape)
-                            new_weights = cut_matrix(new_weights, param.shape)
+                            # When cutting the matrix, it's not contiguous anymore,
+                            # but we need it to be contiguous for broadcasting
+                            # across devices
+                            new_weights = new_weights.contiguous() 
+                            self.gnetdict[_name].weights = new_weights
                             
-                        # When cutting the matrix, it's not contiguous anymore,
-                        # but we need it to be contiguous for broadcasting
-                        # across devices
-                        new_weights = new_weights.contiguous() 
-                        self.gnetdict[_name].weights = new_weights
+                            # Sets the parameters to the corresponding new weights
+                            param.data = nn.Parameter(new_weights)
                         
-                        # Sets the parameters to the corresponding new weights
-                        param.data = nn.Parameter(new_weights)
                     param_list[self.gnetdict[_name].rank].append(param.data)
                 
         for source_id in range(dist.get_world_size()):
             for j in range(len(param_list[source_id])):
-                # Broadcast the weights of the G-Nets calculated on GPU with
+                # Broadcast the weights of the g-nets calculated on GPU with
                 # rank `dist.get_rank()` to all other GPUs.
                 dist.broadcast(param_list[source_id][j], src=source_id)
     
     def backward(self) -> None:
         """
         This function takes the models gradients after a forward and 
-        backward pass through the model and propagates them through the G-Net to
+        backward pass through the model and propagates them through the g-net to
         update the parameters.
         """              
         for name, mod in self.model.module.named_modules(): 
@@ -384,18 +406,18 @@ class GenomicBottleneck(nn.Module):
                     output_scale: float,
                     grad_scale: Optional[float] = 1.) -> None:
         """
-        This function adds a set of G-Nets to the G-Net dictionary.
+        This function adds a set of g-nets to the g-net dictionary.
 
         Args:
-            `name` (str): Name of the layer parameter predicted by the G-Net.
-            `device_id` (int): Rank of the device where the G-Net is stored.
+            `name` (str): Name of the layer parameter predicted by the g-net.
+            `device_id` (int): Rank of the device where the g-net is stored.
             `param` (Tensor): The parameter tensor of the layer.
             `row_col_encodings` (torch.Tensor): The row and column encodings of 
                 the parameter matrix.
-            `gnets` (Sequence[GenomicBottleNet]): The G-Net model.
+            `gnets` (Sequence[GenomicBottleNet]): The g-net model.
             `tile_shape` (Tuple[int, int]): The shape of the tiles used to 
                 predict the weights of the layer.
-            `output_scale` (float): The scaling factor for the output of the G-Net.
+            `output_scale` (float): The scaling factor for the output of the g-net.
             `grad_scale` (float): The scaling factor for the gradients.
         """
         gnets = [gnet.to(device_id) for gnet in gnets]
@@ -428,7 +450,7 @@ class GenomicBottleneck(nn.Module):
                                         weights=param.data,
                                         grad_scale=grad_scale)
         
-        print(f"Creating G-Net for layer: {name}\n"
+        print(f"Creating g-net for layer: {name}\n"
                 f"Layer size: {param.shape}\n"
                 f"Device ID: {device_id}\n"
                 f"Number of g-nets: {len(gnets)}\n"

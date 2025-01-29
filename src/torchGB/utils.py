@@ -10,6 +10,9 @@ import numpy as np
 class EncodingType(Enum):
     ONEHOT = 0 # One-hot vector
     BINARY = 1 # Binary code
+    
+
+ceil = lambda x: np.ceil(x).astype(np.int32)
 
 
 def tile_matrix(matrix: Tensor, row_size: int, col_size: int) -> Tensor:
@@ -38,18 +41,18 @@ def tile_matrix(matrix: Tensor, row_size: int, col_size: int) -> Tensor:
                     .reshape(-1, row_size, col_size))
     
 
-def assemble_matrix(arr: Tensor, new_shape: Tuple[int, int]) -> Tensor:
+def build_matrix(arr: Tensor, new_shape: Tuple[int, int]) -> Tensor:
     """
-    This function is the inverse of tile_matrix. This function reassembles the 
+    This function is the inverse of tile_matrix. This function rebuilds the 
     original array from its tiled form if the initial array was a 2D matrix. 
     The input array must be 3D.
     
     Args:
         `arr` (Tensor): The input array in its tiled form.
-        `new_shape` (Tuple[int, int]): The shape of the reassembled array.
+        `new_shape` (Tuple[int, int]): The shape of the rebuildd array.
         
     Returns:
-        Tensor: The reassembled matrix.
+        Tensor: The rebuildd matrix.
     """
     h, w = new_shape
     row_size, col_size = arr.shape[1:]
@@ -62,18 +65,18 @@ def assemble_matrix(arr: Tensor, new_shape: Tuple[int, int]) -> Tensor:
     return out
 
 
-def assemble_4d_kernel(arr: Tensor, new_shape: Tuple[int, int, int, int]) -> Tensor:
+def build_4d_kernel(arr: Tensor, new_shape: Tuple[int, int, int, int]) -> Tensor:
     """
-    This fucntion is the inverse of tile_matrix. This function reassembles the 
+    This fucntion is the inverse of tile_matrix. This function rebuilds the 
     original array from its tiled form if the original array was a 3D tensor, e.g.
     in the case of a convolution. The input array must be 4D.
     
     Args:
         `arr` (Tensor): The input array in its tiled form.
-        `new_shape` (Tuple[int, int]): The shape of the reassembled array.
+        `new_shape` (Tuple[int, int]): The shape of the rebuildd array.
         
     Returns:
-        Tensor: The reassembled array.
+        Tensor: The rebuildd array.
     """
     h, w, x, y = new_shape
     row_size, col_size = arr.shape[1:3]

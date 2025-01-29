@@ -80,12 +80,6 @@ def get_dataloader(dataset,
                 batch_size=batchsize,
                 num_workers=num_workers,
                 prefetch_factor=prefetch_factor)
-    
-    
-# val_num_words = sum(len(line["text"].split(" ")) for line in oscar_dataset["validation"])
-# test_num_words = sum(len(line["text"].split(" ")) for line in oscar_dataset["test"])
-# print(f"Number of words in val: {val_num_words}\n"
-#       f"Number of words in test: {test_num_words}")
 
 
 def load_model_layers(state_dict, model, optimizer, layer_names):

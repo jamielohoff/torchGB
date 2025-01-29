@@ -2,6 +2,8 @@ import os
 import sys
 import time
 import argparse
+from functools import partial
+
 from loguru import logger
 from tqdm import tqdm
 import wandb
@@ -187,6 +189,7 @@ gnets = GenomicBottleneck(model, num_batches, **experiment_config["gnets"])
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
+# TODO use AdamW, L2 regularization?
 scheduler = None
 
 if args.scheduler:
@@ -194,7 +197,8 @@ if args.scheduler:
     #                                         step_size_up=5000,
     #                                         step_size_down=50_000)
     # scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=experiment_config["lr"], 
+    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, 
+                                              max_lr=experiment_config["lr"], 
                                               pct_start=0.2, div_factor=250,
                                               final_div_factor=1000,
                                               total_steps=num_batches)
@@ -255,7 +259,7 @@ compression_factor = gnets.compression()
 
 # Other stuff that is required
 best_val_loss = float("inf")
-src_mask = generate_square_subsequent_mask(SEQ_LEN-1).to(rank)
+mask = generate_square_subsequent_mask(SEQ_LEN-1).to(rank)
 
 
 # Training function
@@ -274,15 +278,20 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         optimizer.zero_grad()
         gnets.zero_grad()
         gnets.predict_weights() # implicitly updates the model weights!
-
-        output = model(data[:, :SEQ_LEN-1], src_mask)
-        loss = criterion(output.view(-1, VOCAB_SIZE), data[:, 1:SEQ_LEN].reshape(-1))
+        
+        tokens = data[:, :SEQ_LEN-1]
+        output = model(tokens, mask)
+        
+        # Auto-regressive, unsupervised loss
+        logits = output.view(-1, VOCAB_SIZE)
+        labels = data[:, 1:SEQ_LEN].reshape(-1)
+        loss = criterion(logits, labels)
 
         # Backpropagate the error through the p-net and then through the g-nets
         loss.backward()
         gnets.backward()
         
-        nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        # nn.utils.clip_grad_norm_(model.parameters(), 0.25) # what value to use here?
         
         # Do a gradient-descent step with the p-nets and then the g-nets
         optimizer.step()
@@ -359,15 +368,20 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
 def evaluate(model: nn.Module, eval_loader) -> torch.Tensor:
     model.eval() # turn on evaluation mode
     total_loss, norm = 0, 0
-    global src_mask
+    global mask
     with torch.no_grad():
         start_time = time.time()
         for data in eval_loader:
             data = torch.stack(data["input_ids"]).t().to(rank)
             seq_len = min(SEQ_LEN, data.size(1))
-            output = model(data[:, :seq_len-1], src_mask[:seq_len-1, :seq_len-1])
-            output_flat = output.view(-1, VOCAB_SIZE)
-            total_loss += criterion(output_flat, data[:, 1:seq_len].reshape(-1)).item()
+            
+            tokens = data[:, :seq_len-1]
+            _mask = mask[:seq_len-1, :seq_len-1]
+            output = model(tokens, _mask)
+            
+            logits = output.view(-1, VOCAB_SIZE)
+            labels = data[:, 1:seq_len].reshape(-1)
+            total_loss += criterion(logits, labels).item()
             norm += 1
     logger.info(f"Validation time: {time.time() - start_time}")
     return torch.tensor([total_loss / norm]).to(rank)
@@ -415,6 +429,8 @@ if rank == 0:
     run.log({"validation_loss": val_loss, "val ppl": val_ppl})
 
 
+
+loader = partial(get_dataloader, tokenized_train_dataset, rank, world_size, BATCHSIZE)
 # Actual training loop
 for epoch in range(EPOCHS):
     dist.barrier()
@@ -424,8 +440,8 @@ for epoch in range(EPOCHS):
     tokenized_train_dataset = tokenized_train_dataset.shuffle(seed=SEED)
     tokenized_val_dataset = tokenized_val_dataset.shuffle(seed=SEED)
     
-    train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, BATCHSIZE, stateful=True)
-    val_loader = get_dataloader(tokenized_val_dataset, rank, world_size, BATCHSIZE)
+    train_loader = loader(stateful=True)
+    val_loader = loader()
 
 
 # Evaluate the best model on the test dataset
