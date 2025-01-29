@@ -1,7 +1,6 @@
 import numpy as np
 
 import torch
-import torch.nn as nn
 from torch import Tensor
 
 from ..gnet import GenomicBottleNet, GNetLayerTuple
@@ -20,14 +19,14 @@ def linear_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GN
 
     Args:
         param (Tensor): Parameter, i.e. weight matrix that we wish to compress/
-            predict using a genomic network.
-        hidden_dim (int): Size of the hidden dimension of the g-net(s) that predict
+            predict using a g-net.
+        hidden_dim (int): Size of the hidden dimension of the g-nets that predict
             the weight matrix.
         gnet_batchsize (int): Maximum size of a single square tile.
 
     Returns:
         GNetLayerTuple: A tuple that contains the encoding of the weight positions,
-            the genomic networks, the shape of a single tile and the scale of the outputs.
+            the g-net, the shape of a single tile and the scale of the outputs.
     """
     tile_size = ceil(np.sqrt(gnet_batchsize))
     tile_shape = (tile_size, tile_size)

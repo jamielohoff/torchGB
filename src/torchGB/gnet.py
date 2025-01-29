@@ -29,10 +29,8 @@ class GenomicBottleNet(nn.Module):
     sizes: Sequence[int]
     output_scale: float
     
-    def __init__(self, 
-                sizes: Sequence[int], 
-                output_scale: float,
-                activation_fn: Optional[Callable[[Tensor], Tensor]] = F.tanh) -> None:
+    def __init__(self, sizes: Sequence[int], output_scale: float,
+                 activation_fn: Optional[Callable[[Tensor], Tensor]] = F.tanh) -> None:
         assert len(sizes) > 1, "List must have at least 3 entries!"
         super(GenomicBottleNet, self).__init__()
         self.output_scale = output_scale.detach()

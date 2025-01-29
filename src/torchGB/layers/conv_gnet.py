@@ -1,7 +1,6 @@
 import numpy as np
 
 import torch
-import torch.nn as nn
 from torch import Tensor
 
 from ..gnet import GenomicBottleNet, GNetLayerTuple
@@ -69,7 +68,4 @@ def build_conv2d_gnet_output(name: str, param: Tensor, weights: Tensor,
     new_weights = build_4d_kernel(weights, shape)
     new_weights = cut_matrix(new_weights, param.shape)
     return new_weights
-
-
-# register_gnet_type(nn.Conv2d, init_conv2d_gnet, assemble_conv2d_gnet_output)
 

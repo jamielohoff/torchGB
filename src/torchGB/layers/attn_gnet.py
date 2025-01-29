@@ -1,7 +1,6 @@
 import numpy as np
 
 import torch
-import torch.nn as nn
 from torch import Tensor
 
 from .linear_gnet import linear_gnet_layer
@@ -72,7 +71,4 @@ def build_attn_gnet_output(name: str, param: Tensor, weights: Tensor,
     new_weights = build_matrix(weights, shape)
     new_weights = cut_matrix(new_weights, param.shape)
     return new_weights
-
-
-# register_gnet_type(nn.TransformerEncoder, init_attn_gnet, assemble_attn_gnet_output)
         
