@@ -396,15 +396,10 @@ class GenomicBottleneck(nn.Module):
                     optimizer.step()
                     # scheduler.step()
                     
-    def _add_gnets(self, 
-                    name: str, 
-                    device_id: int,
-                    param: Tensor,
-                    row_col_encodings: Tensor,
-                    gnets: GenomicBottleNet, 
-                    tile_shape: Tuple[int, int],
-                    output_scale: float,
-                    grad_scale: Optional[float] = 1.) -> None:
+    def _add_gnets(self, name: str, device_id: int, param: Tensor,
+                   row_col_encodings: Tensor, gnets: GenomicBottleNet, 
+                   tile_shape: Tuple[int, int], output_scale: float,
+                   grad_scale: Optional[float] = 1.) -> None:
         """
         This function adds a set of g-nets to the g-net dictionary.
 
@@ -451,8 +446,8 @@ class GenomicBottleneck(nn.Module):
                                         grad_scale=grad_scale)
         
         print(f"Creating g-net for layer: {name}\n"
-                f"Layer size: {param.shape}\n"
-                f"Device ID: {device_id}\n"
-                f"Number of g-nets: {len(gnets)}\n"
-                f"Learning rate: {_lr}\n")
+              f"Layer size: {param.shape}\n"
+              f"Device ID: {device_id}\n"
+              f"Number of g-nets: {len(gnets)}\n"
+              f"Learning rate: {_lr}\n")
         
