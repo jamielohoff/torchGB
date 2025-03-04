@@ -1,7 +1,7 @@
 .. _usage:
 
 
-Using the genomic bottleneck to compress models
+Using the Genomic Bottleneck to Compress Models
 ===============================================
 This guide explains the internals of **torchGB**.
 
@@ -143,6 +143,7 @@ as the final result of the computation.
 Here's an excerpt from the `conv_gnet.py` file showing this implementation:
 ..  code-block:: python
     :caption: How the convolutional g-net output is built
+
 def build_conv2d_gnet_output(name: str, param: Tensor, weights: Tensor, tile_shape) -> Tensor:
     num_row_tiles = math.ceil(param.shape[0]/tile_shape[0])
     num_col_tiles = math.ceil(param.shape[1]/tile_shape[1])
