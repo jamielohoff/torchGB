@@ -193,10 +193,6 @@ optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
 scheduler = None
 
 if args.scheduler:
-    # scheduler = optim.lr_scheduler.CyclicLR(optimizer, 1e-7, 2.5e-4, 
-    #                                         step_size_up=5000,
-    #                                         step_size_down=50_000)
-    # scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
     scheduler = optim.lr_scheduler.OneCycleLR(optimizer, 
                                               max_lr=experiment_config["lr"], 
                                               pct_start=0.2, div_factor=250,
@@ -291,10 +287,10 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         loss.backward()
         gnets.backward()
         
-        # nn.utils.clip_grad_norm_(model.parameters(), 0.25) # what value to use here?
+        nn.utils.clip_grad_norm_(model.parameters(), 0.25) # what value to use here?
         
         # Do a gradient-descent step with the p-nets and then the g-nets
-        optimizer.step()
+        optimizer.step() # Need to still update the parameters that have no g-nets attached!
         if scheduler is not None: scheduler.step()
         gnets.step()
         

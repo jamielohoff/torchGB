@@ -54,21 +54,50 @@ def linear_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GN
     return row_col_encoding, gnets, tile_shape, output_scale
 
 
-def init_linear_gnet(pname: str, param: Tensor, hidden_dim: int, 
+def init_linear_gnet(pname: str, param: Tensor, hidden_dim: int,
                      gnet_batchsize: int) -> GNetLayerTuple:
-    if "weight" in pname:                                           
+    """
+    Initializes a GenomicBottleNet (g-net) for a linear layer.
+
+    Args:
+        pname (str): Name of the parameter. If "weight" is in the name,
+            this function will initialize the linear g-net.
+        param (Tensor): Parameter, i.e. weight matrix that we wish to compress/
+            predict using a g-net.
+        hidden_dim (int): Size of the hidden dimension of the g-nets that predict
+            the weight matrix.
+        gnet_batchsize (int): Maximum size of a single square tile.
+
+    Returns:
+        GNetLayerTuple: A tuple that contains the encoding of the weight positions,
+            the g-net, the shape of a single tile and the scale of the outputs.
+    """
+    if "weight" in pname:
         return linear_gnet_layer(param, hidden_dim, gnet_batchsize)
     else:
         return None
-    
+
 
 def build_linear_gnet_output(name: str, param: Tensor, weights: Tensor, 
-                                tile_shape) -> Tensor:
+                             tile_shape) -> Tensor:
+    """
+    Builds the output of a linear layer using a GenomicBottleNet (g-net).
+
+    Args:
+        name (str): Name of the parameter.
+        param (Tensor): Parameter, i.e. weight matrix that we wish to compress/
+            predict using a g-net.
+        weights (Tensor): Weights used in the computation.
+        tile_shape: Shape of each tile.
+
+    Returns:
+        Tensor: Output of the linear layer computed using the g-net.
+    """
     num_row_tiles = ceil(param.shape[0]/tile_shape[0])
     num_col_tiles = ceil(param.shape[1]/tile_shape[1])
-    
+
     shape = (num_row_tiles*tile_shape[0], num_col_tiles*tile_shape[1])
-    
+
     new_weights = build_matrix(weights, shape)
     new_weights = cut_matrix(new_weights, param.shape)
     return new_weights

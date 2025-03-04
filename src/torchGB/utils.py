@@ -8,6 +8,17 @@ import numpy as np
 
 
 class EncodingType(Enum):
+    """
+    An enumeration of encoding types.
+
+    **ONEHOT**
+        A one-hot vector encoding type. Each element in the sequence is mapped 
+        to a unique binary vector.
+
+    **BINARY**
+        A binary encoding type. Each element in the sequence is mapped to a 
+        single binary value.
+    """
     ONEHOT = 0 # One-hot vector
     BINARY = 1 # Binary code
     
@@ -20,13 +31,13 @@ def tile_matrix(matrix: Tensor, row_size: int, col_size: int) -> Tensor:
     Return an array of shape (n, row_size, col_size) where
     n * row_size * col_size = arr.size
 
-    If `arr` is a 2D array, the returned array should look like `n` subblocks with
+    If arr is a 2D array, the returned array should look like n subblocks with
     each subblock preserving the "physical" layout of arr.
     
     Args:
-        `matrix` (Tensor): The input array to be tiled. Has to be two-dimensional.
-        `row_size` (int): The number of rows in each subtile.
-        `col_size` (int): The number of columns in each subtile.
+        matrix (Tensor): The input array to be tiled. Has to be two-dimensional.
+        row_size (int): The number of rows in each subtile.
+        col_size (int): The number of columns in each subtile.
         
     Returns:
         Tensor: The tiled array.
@@ -48,8 +59,8 @@ def build_matrix(arr: Tensor, new_shape: Tuple[int, int]) -> Tensor:
     The input array must be 3D.
     
     Args:
-        `arr` (Tensor): The input array in its tiled form.
-        `new_shape` (Tuple[int, int]): The shape of the rebuildd array.
+        arr (Tensor): The input array in its tiled form.
+        new_shape (Tuple[int, int]): The shape of the rebuildd array.
         
     Returns:
         Tensor: The rebuildd matrix.
@@ -72,8 +83,8 @@ def build_4d_kernel(arr: Tensor, new_shape: Tuple[int, int, int, int]) -> Tensor
     in the case of a convolution. The input array must be 4D.
     
     Args:
-        `arr` (Tensor): The input array in its tiled form.
-        `new_shape` (Tuple[int, int]): The shape of the rebuildd array.
+        arr (Tensor): The input array in its tiled form.
+        new_shape (Tuple[int, int]): The shape of the rebuildd array.
         
     Returns:
         Tensor: The rebuildd array.
@@ -91,8 +102,8 @@ def cut_matrix(arr: Tensor, new_shape: Sequence[int]) -> Tensor:
     This function cuts the padded matrix to its true shape.
     
     Args:
-        `arr` (Tensor): The input array to be cut.
-        `new_shape` (Sequence[int]): The true shape of the matrix.
+        arr (Tensor): The input array to be cut.
+        new_shape (Sequence[int]): The true shape of the matrix.
         
     Returns:
         Tensor: The cut array.
@@ -143,9 +154,9 @@ def make_row_col_encoding(param_shape: Sequence[int],
     
     
     Args:
-        `param_shape` (Sequence[int]): Shape of the weight matrix.
-        `encoding_types` (Sequence[EncodingType]): Encoding type for each axis.
-        `num_encoding_bits` (Sequence[int]): Number of bits for each axis.
+        param_shape (Sequence[int]): Shape of the weight matrix.
+        encoding_types (Sequence[EncodingType]): Encoding type for each axis.
+        num_encoding_bits (Sequence[int]): Number of bits for each axis.
         
     Returns:
         Tensor: Array of shape (np.prod(dims), np.sum(bits)).
@@ -195,12 +206,13 @@ def make_row_col_encoding(param_shape: Sequence[int],
     row_col_encoding = np.concatenate(encoded_dims, axis=-1)
     if row_col_encoding.ndim == 1:
         row_col_encoding = row_col_encoding[np.newaxis, :]
+        
+    row_col_encoding = np.random.normal(size=row_col_encoding.shape, loc = 0., scale=1.)
 
     # Make inputs a torch tensor and detach from computational graph
-    row_col_encoding = torch.tensor(row_col_encoding, 
-                                    dtype=torch.float, 
+    row_col_encoding = torch.tensor(row_col_encoding, dtype=torch.float, 
                                     requires_grad=False)
-
+    
     # Normalization for Xavier initialization
     with torch.no_grad():
         row_col_encoding = (row_col_encoding - torch.mean(row_col_encoding)) / \

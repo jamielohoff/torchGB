@@ -1,25 +1,22 @@
 from typing import Callable, Optional, Sequence, Tuple
-import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .utils import make_row_col_encoding, EncodingType, ceil
-
 
 class GenomicBottleNet(nn.Module):
     """
-    Improved version of the variable-length g-net that uses a `for`-loop for 
+    Improved version of the variable-length g-net that uses a for-loop for 
     initialization.
     
     Args:
-        `layers` (nn.ModuleList): ModuleList that contains all differentiable
-            layers of the G-Net.
-        `sizes` (Sequence[int]): List of sizes for the G-Net layers.
-        `output_scale` (float): Scaling factor for the output of the G-Net.
-        `activation_fn` (Optional[Callable[[Tensor], Tensor]]): Activation 
+        layers (nn.ModuleList): ModuleList that contains all differentiable
+            layers of the g-net.
+        sizes (Sequence[int]): List of sizes for the g-net layers.
+        output_scale (float): Scaling factor for the output of the g-net.
+        activation_fn (Optional[Callable[[Tensor], Tensor]]): Activation 
             function for the hidden layers. Default is ReLU.
 
     Returns:
@@ -28,10 +25,9 @@ class GenomicBottleNet(nn.Module):
     layers: nn.ModuleList
     sizes: Sequence[int]
     output_scale: float
-    
+
     def __init__(self, sizes: Sequence[int], output_scale: float,
-                 activation_fn: Optional[Callable[[Tensor], Tensor]] = F.tanh) -> None:
-        assert len(sizes) > 1, "List must have at least 3 entries!"
+                 activation_fn: Optional[Callable[[Tensor], Tensor]] = F.relu) -> None:
         super(GenomicBottleNet, self).__init__()
         self.output_scale = output_scale.detach()
         self.activation_fn = activation_fn
@@ -51,4 +47,23 @@ class GenomicBottleNet(nn.Module):
                 
 
 GNetLayerTuple = Tuple[Tensor, Sequence[GenomicBottleNet], Sequence[int], float]
+
+
+class ParallelGenomicBottleNet(nn.Module):
+    """
+    A specialized type of g-net that uses a convolution to parallelize the 
+    computation of different tiles. Works well for models with many g-nets.
+
+    Args:
+        nn (_type_): _description_
+    """
+    layers: nn.ModuleList
+    sizes: Sequence[int]
+    output_scale: float
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+    def forward(self, x: Tensor) -> Tensor:
+        pass
 

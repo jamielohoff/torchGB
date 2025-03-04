@@ -23,25 +23,27 @@ gnet_types = {}
 @dataclass
 class GNetType:
     """
-    Simple container data structure to store the init and build functions of a 
-    g-net.
+    Simple container data structure to store the `init` and `build` functions
+    of a g-net.
 
     Args:
-        _type_: _description_
+        `name` (str): The type of g-net. This should be a unique identifier for each layer type.
+        `init` (Callable): A function that initializes the weights and bias of the layer.
+        `build` (Callable): A function that builds the output structure of the layer.
     """
     name: str
     init: Callable
     build: Callable
     
 
-def register_gnet_type(mod_type: nn.Module, init: Callable, build: Callable) -> None:
+def register_gnet_type(mod_type: nn.Module, init: Callable[[nn.Module], None], build: Callable[[nn.Module], None]) -> None:
     """
     This function registers a new g-net type to be used in the Genomic Bottleneck.
 
     Args:
-        type (nn.Module): _description_
-        init (Callable): _description_
-        build (Callable): _description_
+        `mod_type` (nn.Module): The type of module for which to register the g-net.
+        `init` (Callable[[nn.Module], None]): A function that initializes the weights and bias of the layer.
+        `build` (Callable[[nn.Module], None]): A function that builds the output structure of the layer.
     """
     global gnet_types
     gnet_types[mod_type] = GNetType(str(mod_type), init, build)
@@ -140,7 +142,8 @@ class GenomicBottleneck(nn.Module):
             for pname, param in mod.named_parameters():    
                 _name = name + "." + pname 
                 ignore_param = any([lname in _name for lname in ignore_layers])
-                if param.requires_grad and not ignore_param and not "bias" in pname and not _name in initialized:
+                if param.requires_grad and not ignore_param \
+                    and not "bias" in pname and not _name in initialized:
                     # This implements a rudimentary load balancer across devices
                     # that removes the bias towards the first device
                     device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
@@ -150,9 +153,7 @@ class GenomicBottleneck(nn.Module):
                     # compression or edit the way the current compression behavior
                     gnet_type = gnet_types.get(type(mod))
                     if gnet_type:
-                        # First index of compression behavior describes 
-                        # initialization of the g-net for this specific
-                        # layer type
+                        # Here we initialize the g-net for specific layer types
                         if device_id == dist.get_rank():
                             out_fn = gnet_type.init
                             out = out_fn(pname, param, hidden_dim, 
@@ -308,8 +309,6 @@ class GenomicBottleneck(nn.Module):
         to the original shape and sets the models parameters to the corresponding
         new weights.
         """
-        if dist.get_rank() == 0:
-            print(self.gnetdict.get("transformer_encoder.layers.4.self_attn.in_proj_weight").gnets[0].layers[0].weight.data)
         predicted = set()
         param_list = {i:[] for i in range(dist.get_world_size())}
         for name, mod in self.model.module.named_modules(): 
@@ -321,6 +320,7 @@ class GenomicBottleneck(nn.Module):
                         new_weights = []
                         tile_shape = gnetstack.tile_shape
                         for gnet in gnetstack.gnets:
+                            # This predicts the new weight tiles using the g-nets:
                             gnet_input = gnetstack.gnet_input
                             new_weight_tile = gnet(gnet_input)
                             new_weight_tile = new_weight_tile.reshape(tile_shape)
@@ -329,9 +329,8 @@ class GenomicBottleneck(nn.Module):
                         # Assemble the new weight tiles into the full weight matrix
                         new_weights = torch.stack(new_weights, dim=0)
                         
-                        # Second index of compression behavior describes 
-                        # assembly of the weight matrix predicted by
-                        # the g-nets
+                        # Here we build the weight matrix from the tiles 
+                        # predicted by the g-nets 
                         gnet_type = gnet_types.get(type(mod))
                         if gnet_type:
                             weights_fn = gnet_type.build
@@ -376,7 +375,6 @@ class GenomicBottleneck(nn.Module):
                             out_scale = gnetstack.gnets[0].output_scale
                             grad_scale =  gnet_batch_size * torch.square(out_scale)
                             norm_grad = param.grad / grad_scale
-                            print("backpropagating", _name)
                             gnetstack.weights.backward(norm_grad)
                             backpropagated.add(_name)
                       
@@ -399,10 +397,10 @@ class GenomicBottleneck(nn.Module):
                 are network objects that contain optimizers and schedulers.
         """
         for name in self.gnetdict.keys():
-            if self.gnetdict[name].rank == dist.get_rank():
-                # for optimizer, scheduler in zip(self.gnetdict[name].optimizers, 
-                #                                 self.gnetdict[name].schedulers):
-                for optimizer in self.gnetdict[name].optimizers:
+            gnetstack = self.gnetdict[name]
+            if gnetstack.rank == dist.get_rank():
+                # iter = zip(gnetstack.optimizers, gnetstack.schedulers)
+                for optimizer in gnetstack.optimizers:
                     optimizer.step()
                     # scheduler.step()
                     
@@ -428,27 +426,22 @@ class GenomicBottleneck(nn.Module):
         gnets = [gnet.to(device_id) for gnet in gnets]
         row_col_encodings = row_col_encodings.to(device_id)
         
-        num_layers = len(gnets[0].sizes) # number of layers in a gnet
+        num_layers = len(gnets[0].sizes) # number of layers in a g-net
         # NOTE: Do not touch! Normalization has been carefully computed...
         _lr = self.lr / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5
 
         optimizer = lambda params: optim.SGD(params, lr=_lr)
         optimizers = [optimizer(gnet.parameters()) for gnet in gnets]
         
-        # scheduler = lambda optim: OneCycleLR(optim,
-        #                                     max_lr=_lr, 
-        #                                     pct_start=0.2,
-        #                                     div_factor=250,
-        #                                     final_div_factor=1000,
-        #                                     total_steps=self.num_batches)
-        
-        # schedulers = [scheduler(optim) for optim in optimizers]
+        scheduler = lambda opt: optim.lr_scheduler.LinearLR(opt, start_factor=1, 
+                                                            end_factor=1)
+        schedulers = None # [scheduler(opt) for opt in optimizers]
         
         grad_scale = 1. # placeholder value; never used
         self.gnetdict[name] = GNetLayer(name=name, rank=device_id,
                                         tile_shape=tile_shape, gnets=gnets,
                                         optimizers=optimizers,
-                                        # schedulers=schedulers,
+                                        schedulers=schedulers,
                                         gnet_input=row_col_encodings,
                                         weights=param.data,
                                         grad_scale=grad_scale)
