@@ -344,7 +344,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 best_val_loss = val_loss
    
                 if args.checkpoint:
-                    logger.debug(f"Saving G-Net weights under {GNET_CHCKPT_PATH}.")
+                    logger.debug(f"Saving g-net weights under {GNET_CHCKPT_PATH}.")
                     gnets.save(GNET_CHCKPT_PATH) 
                 
                     if rank == 0:
@@ -394,7 +394,7 @@ val_loader = get_dataloader(tokenized_val_dataset, rank, world_size, BATCHSIZE)
 # Initialize metrics logging on rank 0
 if rank == 0:
     logger.info(f"Number of model parameters: {num_params}")   
-    logger.info(f"G-Net compression: {compression_factor}") 
+    logger.info(f"g-net compression: {compression_factor}") 
     logger.info(f"validation loss {float(val_loss):5.2f} | "
                 f"validation ppl {val_ppl:8.2f}")
     

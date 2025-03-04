@@ -141,6 +141,7 @@ split it into 4 tiles of size 3x1 along its rows:
 as the final result of the computation.
 
 Here's an excerpt from the ``conv_gnet.py`` file showing this implementation:
+
 ..  code-block:: python
     :caption: How the convolutional g-net output is built
 
