@@ -23,13 +23,13 @@ gnet_types = {}
 @dataclass
 class GNetType:
     """
-    Simple container data structure to store the `init` and `build` functions
+    Simple container data structure to store the init and build functions
     of a g-net.
 
     Args:
-        `name` (str): The type of g-net. This should be a unique identifier for each layer type.
-        `init` (Callable): A function that initializes the weights and bias of the layer.
-        `build` (Callable): A function that builds the output structure of the layer.
+        name (str): The type of g-net. This should be a unique identifier for each layer type.
+        init (Callable): A function that initializes the weights and bias of the layer.
+        build (Callable): A function that builds the output structure of the layer.
     """
     name: str
     init: Callable
@@ -41,9 +41,9 @@ def register_gnet_type(mod_type: nn.Module, init: Callable[[nn.Module], None], b
     This function registers a new g-net type to be used in the Genomic Bottleneck.
 
     Args:
-        `mod_type` (nn.Module): The type of module for which to register the g-net.
-        `init` (Callable[[nn.Module], None]): A function that initializes the weights and bias of the layer.
-        `build` (Callable[[nn.Module], None]): A function that builds the output structure of the layer.
+        mod_type (nn.Module): The type of module for which to register the g-net.
+        init (Callable[[nn.Module], None]): A function that initializes the weights and bias of the layer.
+        build (Callable[[nn.Module], None]): A function that builds the output structure of the layer.
     """
     global gnet_types
     gnet_types[mod_type] = GNetType(str(mod_type), init, build)
@@ -61,20 +61,20 @@ class GNetLayer:
     This class stores all the information about the g-net for a specific layer.
     
     Args:
-        `name` (str): Name of the layer parameter predicted by the g-net.
-        `rank` (int): Rank of the device where the g-net is stored.
-        `tile_shape` (Optional[Sequence[int, int]]): The shape of the tiles used 
+        name (str): Name of the layer parameter predicted by the g-net.
+        rank (int): Rank of the device where the g-net is stored.
+        tile_shape (Optional[Sequence[int, int]]): The shape of the tiles used 
             to predict the weights of the layer.
-        `gnets` (Sequence[GenomicBottleNet]): Sequence of g-net models. 
+        gnets (Sequence[GenomicBottleNet]): Sequence of g-net models. 
             This is typically a list of MLPs.
-        `optimizers` (Sequence[optim.Optimizer]): The optimizers used to train 
+        optimizers (Sequence[optim.Optimizer]): The optimizers used to train 
             all the the g-nets.
-        `gnet_input` (Tensor): The input to the g-net. This is a 
+        gnet_input (Tensor): The input to the g-net. This is a 
             constant tensor that is used to predict the new weights of the 
             layer. They encode the (i,j)-position of every weight in the 
             parameter matrix of the layer.
-        `weights` (Tensor): The weights predicted by the g-net.
-        `grad_scale` (float): The scaling factor for the gradients.   
+        weights (Tensor): The weights predicted by the g-net.
+        grad_scale (float): The scaling factor for the gradients.   
     """
     name: str
     rank: int
@@ -89,7 +89,7 @@ class GNetLayer:
 
 class GenomicBottleneck(nn.Module):
     """
-    The `GenomicBottleneck` class implements a hypernetwork that predicts all
+    The GenomicBottleneck class implements a hypernetwork that predicts all
     learnable weights matrices in a given neural network model. For every weight,
     a g-net is created that predicts the new weights of the layer.
     The input of every g-net is the encoding of the position of a single weight, 
@@ -102,20 +102,20 @@ class GenomicBottleneck(nn.Module):
     Thus the g-net predicts the value of a single weight of the matrix, but we 
     can parallelize the process by batching across the all the weights and
     reshaping the resulting output into the weight tensor.
-    When launched with the `torchrun -nproc_per_node='num_gpus'` command, 
+    When launched with the torchrun -nproc_per_node='num_gpus' command, 
     every g-net is stored on a different device to parallelize the computation. 
     Furthermore, every g-net has its own optimizer.
     Gradients are backpropagated by first backpropagating the gradients through
-    the `model` and then using them as seeds for further backpropagation through
+    the model and then using them as seeds for further backpropagation through
     the g-nets.
 
     Args:
-        `model` (nn.Module): The neural network model.
-        `num_batches` (int): The number of batches in the training loop.
-        `hidden_dim` (int): The size of the hidden layers in the g-nets.
-        `lr` (float): The learning rate of the g-nets.
-        `gnet_batchsize` (int): The number of parameters per tile.
-        `ignore_layers` (Optional[Sequence[str]]): A list of layer names and 
+        model (nn.Module): The neural network model.
+        num_batches (int): The number of batches in the training loop.
+        hidden_dim (int): The size of the hidden layers in the g-nets.
+        lr (float): The learning rate of the g-nets.
+        gnet_batchsize (int): The number of parameters per tile.
+        ignore_layers (Optional[Sequence[str]]): A list of layer names and 
             types that should not be predicted using a g-net.
     """
     lr: float
@@ -224,7 +224,7 @@ class GenomicBottleneck(nn.Module):
         Save the g-nets from a checkpoint file.
 
         Args:
-            `fname` (str): File to which we wish to write the weights of the g-nets.
+            fname (str): File to which we wish to write the weights of the g-nets.
         """
         checkpoint = {}
 
@@ -260,7 +260,7 @@ class GenomicBottleneck(nn.Module):
         the g-nets corresponding to the current process rank are loaded.
 
         Args:
-            `fname` (str): File from which to load the g-nets.
+            fname (str): File from which to load the g-nets.
         """
         checkpoint = torch.load(fname, map_location=torch.device("cpu"))
 
@@ -279,9 +279,9 @@ class GenomicBottleneck(nn.Module):
 
     def train(self) -> None:
         """
-        Trains the neural networks in the `gnetdict` attribute that are assigned 
+        Trains the neural networks in the gnetdict attribute that are assigned 
         to the current process rank. This method iterates over the keys in the 
-        `gnetdict` attribute and checks if the `rank` of each `gnetdict` entry
+        gnetdict attribute and checks if the rank of each gnetdict entry
         matches the current process rank. If it does, it sets the corresponding 
         neural networks to training mode.
         """
@@ -292,8 +292,8 @@ class GenomicBottleneck(nn.Module):
     
     def zero_grad(self) -> None:
         """
-        Zeros out all gradients in the optimizers, similarly to `loss.zero_grad()`.
-        This function iterates over all the networks in the `gnetdict` dictionary.
+        Zeros out all gradients in the optimizers, similarly to loss.zero_grad().
+        This function iterates over all the networks in the gnetdict dictionary.
         For each network that is assigned to the current process rank, it sets the 
         gradients of all associated optimizers to zero.
         """
@@ -352,7 +352,7 @@ class GenomicBottleneck(nn.Module):
         for source_id in range(dist.get_world_size()):
             for j in range(len(param_list[source_id])):
                 # Broadcast the weights of the g-nets calculated on GPU with
-                # rank `dist.get_rank()` to all other GPUs.
+                # rank dist.get_rank() to all other GPUs.
                 dist.broadcast(param_list[source_id][j], src=source_id)
     
     def backward(self) -> None:
@@ -383,7 +383,7 @@ class GenomicBottleneck(nn.Module):
         Performs a single optimization step for each optimizer in the network 
         dictionary.
 
-        This function iterates over the keys in the `gnetdict` attribute, 
+        This function iterates over the keys in the gnetdict attribute, 
         which is a dictionary containing network objects. For each network 
         object that matches the current process rank, it performs an 
         optimization step using the optimizers associated with that network.
@@ -412,22 +412,24 @@ class GenomicBottleneck(nn.Module):
         This function adds a set of g-nets to the g-net dictionary.
 
         Args:
-            `name` (str): Name of the layer parameter predicted by the g-net.
-            `device_id` (int): Rank of the device where the g-net is stored.
-            `param` (Tensor): The parameter tensor of the layer.
-            `row_col_encodings` (torch.Tensor): The row and column encodings of 
+            name (str): Name of the layer parameter predicted by the g-net.
+            device_id (int): Rank of the device where the g-net is stored.
+            param (Tensor): The parameter tensor of the layer.
+            row_col_encodings (torch.Tensor): The row and column encodings of 
                 the parameter matrix.
-            `gnets` (Sequence[GenomicBottleNet]): The g-net model.
-            `tile_shape` (Tuple[int, int]): The shape of the tiles used to 
+            gnets (Sequence[GenomicBottleNet]): The g-net model.
+            tile_shape (Tuple[int, int]): The shape of the tiles used to 
                 predict the weights of the layer.
-            `output_scale` (float): The scaling factor for the g-net output.
-            `grad_scale` (float): The scaling factor for the gradients.
+            output_scale (float): The scaling factor for the g-net output.
+            grad_scale (float): The scaling factor for the gradients.
         """
         gnets = [gnet.to(device_id) for gnet in gnets]
         row_col_encodings = row_col_encodings.to(device_id)
         
         num_layers = len(gnets[0].sizes) # number of layers in a g-net
+        ########################################################################
         # NOTE: Do not touch! Normalization has been carefully computed...
+        ########################################################################
         _lr = self.lr / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5
 
         optimizer = lambda params: optim.SGD(params, lr=_lr)
