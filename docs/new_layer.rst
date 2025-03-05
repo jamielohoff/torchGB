@@ -12,23 +12,23 @@ our new g-net type:
     :caption: Defining a new g-net type for compression. Here we use a 
     matrix decomposition as an example.
 
-class MatrixDecompositionGNet(nn.Module):
-    """
-    A specialized type of g-net that uses matrix decomposition to parallelize
-    the computation of different tiles.
+    class MatrixDecompositionGNet(nn.Module):
+        """
+        A specialized type of g-net that uses matrix decomposition to parallelize
+        the computation of different tiles.
 
-    Args:
-        nn (nn.Module): PyTorch neural network module.
-    """
+        Args:
+            nn (nn.Module): PyTorch neural network module.
+        """
 
-    layers: nn.ModuleList
-    sizes: Sequence[int]
-    output_scale: float
+        layers: nn.ModuleList
+        sizes: Sequence[int]
+        output_scale: float
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
 
-    def forward(self, x: Tensor) -> Tensor:
-        # TO DO: implement matrix decomposition logic here
-        pass
+        def forward(self, x: Tensor) -> Tensor:
+            # TO DO: implement matrix decomposition logic here
+            pass
 

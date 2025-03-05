@@ -207,7 +207,7 @@ def make_row_col_encoding(param_shape: Sequence[int],
     if row_col_encoding.ndim == 1:
         row_col_encoding = row_col_encoding[np.newaxis, :]
         
-    row_col_encoding = np.random.normal(size=row_col_encoding.shape, loc = 0., scale=1.)
+    # row_col_encoding = np.random.normal(size=row_col_encoding.shape, loc = 0., scale=1.)
 
     # Make inputs a torch tensor and detach from computational graph
     row_col_encoding = torch.tensor(row_col_encoding, dtype=torch.float, 
