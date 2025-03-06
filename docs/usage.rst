@@ -143,22 +143,17 @@ as the final result of the computation.
 Here's an excerpt from the ``conv_gnet.py`` file showing this implementation:
 
 ..  code-block:: python
-    :caption: How the convolutional g-net output is built
+    :caption: Building the convolutional g-net output.
 
     def build_conv2d_gnet_output(name: str, param: Tensor, weights: Tensor, tile_shape) -> Tensor:
         num_row_tiles = math.ceil(param.shape[0]/tile_shape[0])
         num_col_tiles = math.ceil(param.shape[1]/tile_shape[1])
 
-        shape = (num_row_tiles*tile_shape[0], num_col_tiles*tile_shape[1], param.shape[2], param.shape[3])
+        shape = (num_row_tiles*tile_shape[0], 
+                 num_col_tiles*tile_shape[1], 
+                 param.shape[2], param.shape[3])
 
         new_weights = build_4d_kernel(weights, shape)
-        new_weights = cut_matrix(new_weights, param.shape)
-        return new_weights
-        shape = (num_row_tiles*tile_shape[0], num_col_tiles*tile_shape[1], param.shape[2], param.shape[3])
-        shape = (num_row_tiles*tile_shape[0], num_col_tiles*tile_shape[1])
-
-        new_weights = build_4d_kernel(weights, shape)
-        new_weights = tile_matrix(weights, tile_shape[0], tile_shape[1])
         new_weights = cut_matrix(new_weights, param.shape)
         return new_weights
 

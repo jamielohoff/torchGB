@@ -9,8 +9,7 @@ First, let's define the ``MatrixDecompositionGNet`` class, which will represent
 our new g-net type:
 
 ..  code-block:: python
-    :caption: Defining a new g-net type for compression. Here we use a 
-    matrix decomposition as an example.
+    :caption: Defining a new g-net type for compression. Here we use a low-rank matrix decomposition as an example.
 
     class LowRankMatrixDecompositionGNet(nn.Module):
         """
@@ -19,11 +18,10 @@ our new g-net type:
 
         Args:
             rank (int, optional): Rank for the matrix decomposition. Defaults to 32.
-
         """
 
         def __init__(self, sizes: Sequence[int], rank: int = 32) -> None:
-            super().__init__()
+            super().__init__(self)
             self.rank = rank
 
             # Define two trainable parameters
