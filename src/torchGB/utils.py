@@ -113,7 +113,7 @@ def cut_matrix(arr: Tensor, new_shape: Sequence[int]) -> Tensor:
     
     
 def get_tile_size(param_shape: Sequence[int], 
-                    max_gnet_batch: int) -> Tuple[int, int, int, int]:
+                  max_gnet_batch: int) -> Tuple[int, int, int, int]:
     """
     This function calculates the number of row and column tiles for a given
     weight matrix shape and maximum parameter count per tile. The number of row 
@@ -141,10 +141,10 @@ def get_tile_size(param_shape: Sequence[int],
 
 
 def make_row_col_encoding(param_shape: Sequence[int], 
-                        encoding_types: Sequence[EncodingType],
-                        num_encoding_bits: Sequence[int]) -> Tensor:
+                          encoding_types: Sequence[EncodingType],
+                          num_encoding_bits: Sequence[int]) -> Tensor:
     """
-    This function creates inputs for the G-Nets that encode the position of the
+    This function creates inputs for the g-nets that encode the position of the
     weights in the weight matrix. The encoding can either be done using one-hot
     encoding or binary encoding. The function will return a tensor that has the
     same number of rows as the number of weights in the weight matrix and the
@@ -206,8 +206,6 @@ def make_row_col_encoding(param_shape: Sequence[int],
     row_col_encoding = np.concatenate(encoded_dims, axis=-1)
     if row_col_encoding.ndim == 1:
         row_col_encoding = row_col_encoding[np.newaxis, :]
-        
-    # row_col_encoding = np.random.normal(size=row_col_encoding.shape, loc = 0., scale=1.)
 
     # Make inputs a torch tensor and detach from computational graph
     row_col_encoding = torch.tensor(row_col_encoding, dtype=torch.float, 

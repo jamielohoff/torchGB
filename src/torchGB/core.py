@@ -255,8 +255,8 @@ class GenomicBottleneck(nn.Module):
     def load(self, fname: str) -> None:
         """
         Loads the g-nets from a specified file.
-        This function loads the state dictionaries of the g-nets and their 
-        corresponding optimizers from a checkpoint file. It ensures that only 
+        This function loads the state dictionaries of the g-nets and their
+        corresponding optimizers from a checkpoint file. It ensures that only
         the g-nets corresponding to the current process rank are loaded.
 
         Args:
@@ -264,18 +264,18 @@ class GenomicBottleneck(nn.Module):
         """
         checkpoint = torch.load(fname, map_location=torch.device("cpu"))
 
-        for name in self.gnetdict.keys():      
-            if self.gnetdict[name].rank == dist.get_rank():        
+        for name in self.gnetdict.keys():
+            if self.gnetdict[name].rank == dist.get_rank():
                 entry_name = name + "_state_dict"
                 model_name = "model_" + entry_name
-                optimizer_name = "optimizer_" + entry_name    
+                optimizer_name = "optimizer_" + entry_name
                 d = self.gnetdict[name]
-                
-                for gnet, opt, gnet_params, opt_state in zip(d.gnets, d.optimizers, 
+
+                for gnet, opt, gnet_params, opt_state in zip(d.gnets, d.optimizers,
                                                              checkpoint[model_name],
                                                              checkpoint[optimizer_name]):
                     gnet.load_state_dict(gnet_params)
-                    opt.load_state_dict(opt_state) 
+                    opt.load_state_dict(opt_state)
 
     def train(self) -> None:
         """
@@ -361,8 +361,6 @@ class GenomicBottleneck(nn.Module):
         backward pass through the model and propagates them through the g-net to
         update the parameters.
         """           
-        # We need to find a way so that we only backpropagate through every layer
-        # once TODO
         backpropagated = set()
         for name, mod in self.model.module.named_modules(): 
             for pname, param in mod.named_parameters():  
@@ -432,11 +430,10 @@ class GenomicBottleneck(nn.Module):
         ########################################################################
         _lr = self.lr / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5
 
-        optimizer = lambda params: optim.SGD(params, lr=_lr)
+        optimizer = lambda params: optim.Adam(params,  lr=_lr)
         optimizers = [optimizer(gnet.parameters()) for gnet in gnets]
         
-        scheduler = lambda opt: optim.lr_scheduler.LinearLR(opt, start_factor=1, 
-                                                            end_factor=1)
+        scheduler = lambda opt: optim.lr_scheduler.LinearLR(opt, start_factor=1, end_factor=1)
         schedulers = None # [scheduler(opt) for opt in optimizers]
         
         grad_scale = 1. # placeholder value; never used

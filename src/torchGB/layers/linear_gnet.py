@@ -47,7 +47,7 @@ def linear_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GN
     with torch.no_grad():
         output_scale = torch.std(param.data)   
 
-    gnet_sizes = (num_inputs, hidden_dim, 1)
+    gnet_sizes = (num_inputs, hidden_dim, 2)
     gnets = [GenomicBottleNet(gnet_sizes, output_scale) 
              for _ in range(num_row_tiles*num_col_tiles)]     
     

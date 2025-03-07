@@ -7,7 +7,6 @@ from tqdm import tqdm
 import wandb
 
 import numpy as np 
-import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
@@ -17,8 +16,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
-
-import seaborn as sns
 
 from torchGB import GenomicBottleneck
 from _transformer import GPT, generate_square_subsequent_mask, predict_sequence
@@ -128,8 +125,8 @@ else:
 init_with_gnets = not args.init_with_gnets
 enable_gnets = args.disable_gnets if not init_with_gnets else False
 if init_with_gnets:
-    logger.info(f"Initializing with G-Net weights: {args.load_gnets}")
-    assert args.load_gnets is not None, "Please enter valid path for the G-Nets."
+    logger.info(f"Initializing with g-net weights: {args.load_gnets}")
+    assert args.load_gnets is not None, "Please enter valid path for the g-nets."
 experiment_name = args.name if enable_gnets else args.name
 
 
@@ -158,17 +155,14 @@ if rank == 0 and args.checkpoint:
 
 # Load and create datasets
 train_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
-                             cache_dir=cache_dir, split="train[:95%]"
-                            )
+                             cache_dir=cache_dir, split="train[:95%]")
 
 val_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
-                           cache_dir=cache_dir, split="train[95%:96%]"
-                          )
+                           cache_dir=cache_dir, split="train[95%:96%]")
 val_dataset = val_dataset.take(experiment_config["val_dataset_len"]//world_size)
 
 test_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
-                            cache_dir=cache_dir, split="train[95%:96%]"
-                           )
+                            cache_dir=cache_dir, split="train[95%:96%]")
 
 # Initialize the tokenizer
 tokenizer_path = os.path.join(base_config["dirs"]["tokenizer"], "wikipedia_" + args.language)
@@ -219,9 +213,9 @@ if args.scheduler:
     #                                         step_size_down=50_000)
     # scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
     scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=experiment_config["lr"], 
-                                                pct_start=0.2, div_factor=250,
-                                                final_div_factor=1000,
-                                                total_steps=num_batches)
+                                              pct_start=0.2, div_factor=250,
+                                              final_div_factor=1000,
+                                              total_steps=num_batches)
 
 
 # Dealing with custom model loading
@@ -261,25 +255,25 @@ ignore_layers = [f".{l}." for l in args.ignore_layers.split(",")]
 experiment_config["gnets"]["ignore_layers"] += ignore_layers
 
 
-# Initialize the G-Nets if applicable
+# Initialize the g-nets if applicable
 gnets = None
 if enable_gnets or init_with_gnets:
     gnets = GenomicBottleneck(model, num_batches, **experiment_config["gnets"])
 
 
-# Load G-Net weights if applicable and predict the weights
+# Load g-net weights if applicable and predict the weights
 if args.load_gnets is not None:
     assert os.path.exists(args.load_gnets), f"File {args.load_gnets} does not exist."
-    logger.debug(f"Loading G-Net weights from {args.load_gnets}.")
+    logger.debug(f"Loading g-net weights from {args.load_gnets}.")
     gnets.load(args.load_gnets)
     logger.debug("Predicting weights...")
     with torch.no_grad():
         gnets.predict_weights()
 
 
-# Delete the G-Nets after initialization if we only initialize the model with them
+# Delete the g-nets after initialization if we only initialize the model with them
 if init_with_gnets:
-    logger.info("Deleting G-Nets...")
+    logger.info("Deleting g-nets...")
     gnets = None
     enable_gnets = False
 
@@ -322,15 +316,15 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         if scheduler is not None: scheduler.step()
         if enable_gnets: gnets.step()
         
-        if global_step % 1000 == 0 and rank == 0:
-            attn_map = model.module.transformer_encoder.layers[0].self_attn.in_proj_weight
-            plt.hist(attn_map.flatten().detach().cpu().numpy(), bins=100, range=(-0.12, 0.12))
-            plt.savefig(f"./hist/{experiment_name}_layer0_inprojweight_{global_step}.png")
-            plt.close()
+        # if global_step % 1000 == 0 and rank == 0:
+        #     attn_map = model.module.transformer_encoder.layers[0].self_attn.in_proj_weight
+        #     plt.hist(attn_map.flatten().detach().cpu().numpy(), bins=100, range=(-0.12, 0.12))
+        #     plt.savefig(f"./hist/{experiment_name}_layer0_inprojweight_{global_step}.png")
+        #     plt.close()
             
-            sns.heatmap(attn_map.detach().cpu().numpy(), vmin=-.12, vmax=.12)
-            plt.savefig(f"./heat/{experiment_name}_layer0_inprojweight_{global_step}.png")
-            plt.close()
+        #     sns.heatmap(attn_map.detach().cpu().numpy(), vmin=-.12, vmax=.12)
+        #     plt.savefig(f"./heat/{experiment_name}_layer0_inprojweight_{global_step}.png")
+        #     plt.close()
 
         total_loss += loss.item()
         # Logging
@@ -344,8 +338,8 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
 
             if rank == 0:
                 logger.debug(f"epoch {epoch:3d} | {global_step:5d} batches | "
-                            f"ms/batch {ms_per_batch:5.2f} | "
-                            f"loss {train_loss:5.2f} | ppl {train_ppl:8.2f}")
+                             f"ms/batch {ms_per_batch:5.2f} | "
+                             f"loss {train_loss:5.2f} | ppl {train_ppl:8.2f}")
                 run.log({"train_loss": train_loss, "train ppl": train_ppl})
             dist.barrier()
             
@@ -372,7 +366,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
    
                 if args.checkpoint:
                     if enable_gnets:
-                        logger.debug(f"Saving G-Net weights under {GNET_CHCKPT_PATH}.")
+                        logger.debug(f"Saving g-net weights under {GNET_CHCKPT_PATH}.")
                         gnets.save(GNET_CHCKPT_PATH) 
                 
                     if rank == 0:
@@ -390,7 +384,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
 # Evaluation function
 def evaluate(model: nn.Module, eval_loader) -> torch.Tensor:
     model.eval() # turn on evaluation mode
-    total_loss, norm = 0, 0
+    total_loss, count = 0, 0
     global src_mask
     with torch.no_grad():
         start_time = time.time()
@@ -400,9 +394,9 @@ def evaluate(model: nn.Module, eval_loader) -> torch.Tensor:
             output = model(data[:, :seq_len-1], src_mask[:seq_len-1, :seq_len-1])
             output_flat = output.view(-1, VOCAB_SIZE)
             total_loss += criterion(output_flat, data[:, 1:seq_len].reshape(-1)).item()
-            norm += 1
+            count += 1
     logger.info(f"Validation time: {time.time() - start_time}")
-    return torch.tensor([total_loss / norm]).to(rank)
+    return torch.tensor([total_loss / count]).to(rank)
 
 
 # Compute initial validation loss
@@ -416,46 +410,41 @@ val_loader = get_dataloader(tokenized_val_dataset, rank, world_size, BATCHSIZE)
 # Initialize metrics logging on rank 0
 if rank == 0:
     logger.info(f"Number of model parameters: {num_params}")   
-    logger.info(f"G-Net compression: {compression_factor}") 
+    logger.info(f"g-net compression: {compression_factor}") 
     logger.info(f"validation loss {float(val_loss):5.2f} | "
                 f"validation ppl {val_ppl:8.2f}")
     
     run_config = {"commit_hash": commit_hash,
-                    "batchsize": BATCHSIZE,
-                    "language": args.language,
-                    "compression_factor": compression_factor,
-                    "num_params": num_params,
-                    "ignored layers": args.ignore_layers,
-                    "seed": args.seed,
-                    "world_size": world_size,
-                    **experiment_config,
-                    **base_config}
+                  "batchsize": BATCHSIZE,
+                  "language": args.language,
+                  "compression_factor": compression_factor,
+                  "num_params": num_params,
+                  "ignored layers": args.ignore_layers,
+                  "seed": args.seed,
+                  "world_size": world_size,
+                  **experiment_config,
+                  **base_config}
 
     run_name = experiment_name + "_" + args.language
     
     log_dir = os.path.join(base_config["dirs"]["log"], run_name)
     
     run_config = {"commit_hash": commit_hash,
-                    "batchsize": BATCHSIZE,
-                    "language": args.language,
-                    "compression_factor": compression_factor,
-                    "num_params": num_params,
-                    "ignored layers": args.ignore_layers,
-                    "seed": args.seed,
-                    **experiment_config,
-                    **base_config}
+                  "batchsize": BATCHSIZE,
+                  "language": args.language,
+                  "compression_factor": compression_factor,
+                  "num_params": num_params,
+                  "ignored layers": args.ignore_layers,
+                  "seed": args.seed,
+                  **experiment_config,
+                  **base_config}
     
     wandb.login(key=base_config["key"]["wandb"], 
                 host="https://wandb.fz-juelich.de")
     run_name = experiment_name + "_" + args.language
-    run = wandb.init(entity="ja-lohoff", 
-                    project="GenomicBottleneck", 
-                    group="wikipedia", 
-                    config=run_config, 
-                    mode=args.wandb,
-                    dir=base_config["dirs"]["wandb"],
-                    # id=args.wandb_id,
-                    name=run_name)
+    run = wandb.init(entity="ja-lohoff", project="GenomicBottleneck", 
+                    group="wikipedia", config=run_config, mode=args.wandb,
+                    dir=base_config["dirs"]["wandb"], name=run_name)
 
     run.log({"validation_loss": val_loss, "val ppl": val_ppl})
 

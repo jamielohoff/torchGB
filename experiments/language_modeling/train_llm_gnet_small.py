@@ -9,7 +9,6 @@ from tqdm import tqdm
 import wandb
 
 import numpy as np 
-import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
@@ -20,11 +19,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-import seaborn as sns
-
 from torchGB import GenomicBottleneck
 from _transformer import GPT, generate_square_subsequent_mask, predict_sequence
-from utils import (get_dataloader, load_model_layers, load_config, commit_to_experiments_branch)
+from utils import get_dataloader, load_model_layers, load_config, commit_to_experiments_branch
 
 parser = argparse.ArgumentParser()
 
@@ -168,6 +165,7 @@ def tokenize_function(element):
 rm_cols = train_dataset.column_names
 tokenized_train_dataset = train_dataset.map(tokenize_function, batched=True, 
                                             num_proc=16, remove_columns=rm_cols)
+tokenized_train_dataset = tokenized_train_dataset.shuffle(seed=SEED)
 
 tokenized_val_dataset = val_dataset.map(tokenize_function, batched=True, 
                                         num_proc=16, remove_columns=rm_cols)
@@ -189,7 +187,6 @@ gnets = GenomicBottleneck(model, num_batches, **experiment_config["gnets"])
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
-# TODO use AdamW, L2 regularization?
 scheduler = None
 
 if args.scheduler:
@@ -293,17 +290,6 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         optimizer.step() # Need to still update the parameters that have no g-nets attached!
         if scheduler is not None: scheduler.step()
         gnets.step()
-        
-        # Creating images of weight matrics
-        if global_step % 1000 == 0 and rank == 0:
-            attn_map = model.module.transformer_encoder.layers[0].self_attn.in_proj_weight
-            plt.hist(attn_map.flatten().detach().cpu().numpy(), bins=100, range=(-0.12, 0.12))
-            plt.savefig(f"./hist/{experiment_name}_layer0_inprojweight_{global_step}.png")
-            plt.close()
-            
-            sns.heatmap(attn_map.detach().cpu().numpy(), vmin=-.12, vmax=.12)
-            plt.savefig(f"./heat/{experiment_name}_layer0_inprojweight_{global_step}.png")
-            plt.close()
 
         total_loss += loss.item()
         # Logging
