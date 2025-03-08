@@ -77,7 +77,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     pbar = tqdm(train_loader)
     for data, targets in pbar:
         # Move data to GPU with rank `rank`
-        data = data.reshape(BATCHSIZE, 784).to(rank)
+        data = data.reshape(data.shape[0], -1).to(rank)
         targets = targets.to(rank)
         
         # Zero out the gradients before backpropagation
@@ -110,7 +110,7 @@ def evaluate(model: nn.Module, eval_loader) -> torch.Tensor:
 
     with torch.no_grad():
         for data, targets in eval_loader:
-            data = data.reshape(-1, 784).to(rank)
+            data = data.reshape(data.shape[0], -1).to(rank)
             targets = targets.to(rank)
             
             output = model(data)
