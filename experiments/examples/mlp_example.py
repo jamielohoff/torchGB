@@ -15,7 +15,7 @@ from torchGB import GenomicBottleneck
 
 ### How to launch this script ##################################################
 # To launch this script, you should use the following command:
-# CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 mlp_example.py --gpus 0,1,2,3 --seed 8888 --language en --batchsize 56
+# CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 mlp_example.py --gpus 0,1,2,3 --seed 8888 --language en --batchsize 256
 # This launches the script on 4 GPUs. It is highly recommended to use multiple
 # GPUs, as it is much faster to train the g-nets on multiple GPUs.
 # This example should work with a single GPU none-the-less.
@@ -36,7 +36,6 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
 
 EPOCHS = 10
 BATCHSIZE = args.batchsize
-LOG_INTERVAL = 100
 
 train_dataset = datasets.MNIST(root="./data", train=True, download=True, transform=transforms.ToTensor())
 test_dataset = datasets.MNIST(root="./data", train=False, transform=transforms.ToTensor())
@@ -117,11 +116,12 @@ def evaluate(model: nn.Module):
             total_loss += criterion(output, targets).item()
             acc += (output.argmax(dim=1) == targets).sum().item()
             
-    print(f"Test loss: {total_loss/len(test_loader):.2f}, "
-          f"Test accuracy: {acc/len(test_loader):.2f}")
+    norm = len(test_loader)*BATCHSIZE
+    print(f"Test loss: {total_loss/norm:.2f}, "
+          f"Test accuracy: {acc/norm:.2f}")
 
 
 for e in range(EPOCHS):
     train(model, gnets)
-    evaluate(model, test_loader)
+    evaluate(model)
 
