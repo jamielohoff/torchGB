@@ -103,13 +103,13 @@ def train(model: nn.Module, gnets: GenomicBottleneck):
         
                                        
 # Evaluation function
-def evaluate(model: nn.Module, eval_loader):
+def evaluate(model: nn.Module):
     model.eval() # turn on evaluation mode
     total_loss = 0
     acc = 0
 
     with torch.no_grad():
-        for data, targets in eval_loader:
+        for data, targets in test_loader:
             data = data.reshape(data.shape[0], -1).to(rank)
             targets = targets.to(rank)
             
@@ -117,8 +117,8 @@ def evaluate(model: nn.Module, eval_loader):
             total_loss += criterion(output, targets).item()
             acc += (output.argmax(dim=1) == targets).sum().item()
             
-    print(f"Test loss: {total_loss/len(eval_loader):.2f}, "
-          f"Test accuracy: {acc/len(eval_loader):.2f}")
+    print(f"Test loss: {total_loss/len(test_loader):.2f}, "
+          f"Test accuracy: {acc/len(test_loader):.2f}")
 
 
 for e in range(EPOCHS):
