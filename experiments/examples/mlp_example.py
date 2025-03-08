@@ -124,4 +124,7 @@ def evaluate(model: nn.Module):
 for e in range(EPOCHS):
     train(model, gnets)
     evaluate(model)
+    
+# Freeing up multi-processing resources
+dist.destroy_process_group()
 
