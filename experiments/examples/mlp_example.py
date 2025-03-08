@@ -58,9 +58,9 @@ model = nn.Sequential(
     nn.Linear(256, 64),
     nn.ReLU(),
     nn.Linear(64, 10)
-)
+).to(rank)
+# Wrap the model into a distributed model
 model = DDP(model).to(rank)
-model = GenomicBottleneck(model)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=1e-3)
@@ -77,7 +77,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     pbar = tqdm(train_loader)
     for data, targets in pbar:
         # Move data to GPU with rank `rank`
-        data = data.flatten().to(rank)
+        data = data.reshape(BATCHSIZE, 784).to(rank)
         targets = targets.to(rank)
         
         # Zero out the gradients before backpropagation
@@ -110,7 +110,7 @@ def evaluate(model: nn.Module, eval_loader) -> torch.Tensor:
 
     with torch.no_grad():
         for data, targets in eval_loader:
-            data = data.flatten().to(rank)
+            data = data.reshape(-1, 784).to(rank)
             targets = targets.to(rank)
             
             output = model(data)

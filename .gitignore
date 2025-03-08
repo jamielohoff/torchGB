@@ -80,3 +80,5 @@ slicing_config.yml
 *.png
 *.out
 *.err
+**/data/
+*.gz

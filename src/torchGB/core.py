@@ -144,15 +144,15 @@ class GenomicBottleneck(nn.Module):
                 ignore_param = any([lname in _name for lname in ignore_layers])
                 if param.requires_grad and not ignore_param \
                     and not "bias" in pname and not _name in initialized:
-                    # This implements a rudimentary load balancer across devices
-                    # that removes the bias towards the first device
-                    device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
-                    load_per_rank[device_id] += param.data.numel()
-                    
                     # NOTE: Edit these lines in order to add a new layers for
                     # compression or edit the way the current compression behavior
                     gnet_type = gnet_types.get(type(mod))
                     if gnet_type:
+                        # This implements a rudimentary load balancer across devices
+                        # that removes the bias towards the first device
+                        device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
+                        load_per_rank[device_id] += param.data.numel()
+                    
                         # Here we initialize the g-net for specific layer types
                         if device_id == dist.get_rank():
                             out_fn = gnet_type.init
