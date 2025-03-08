@@ -70,7 +70,7 @@ gnets = GenomicBottleneck(model)
 
 
 # Training function
-def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
+def train(model: nn.Module, gnets: GenomicBottleneck):
     gnets.train()
     model.train()
     
@@ -103,7 +103,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         
                                        
 # Evaluation function
-def evaluate(model: nn.Module, eval_loader) -> torch.Tensor:
+def evaluate(model: nn.Module, eval_loader):
     model.eval() # turn on evaluation mode
     total_loss = 0
     acc = 0
