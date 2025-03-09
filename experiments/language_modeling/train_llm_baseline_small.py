@@ -17,7 +17,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-from torchGB import GenomicBottleneck
 from _transformer import GPT, generate_square_subsequent_mask, predict_sequence
 from utils import (get_dataloader, load_model_layers, load_config, commit_to_experiments_branch)
 
@@ -33,23 +32,11 @@ parser.add_argument("--language", type=str, default="en", help="Which language t
 
 parser.add_argument("--batchsize", type=int, default=16, help="Training batchsize.")
 
-parser.add_argument("--load_gnets", type=str, default=None, 
-                    help="Path to the gnet weights.")
-
 parser.add_argument("--load_model", type=str, default=None,
                     help="Path to the model weights.")
 
-parser.add_argument("--disable_gnets", action="store_false",
-                    help="Use genomic bottleneck compression?")
-
-parser.add_argument("--init_with_gnets", action="store_false",
-                    help="Initialize the model with the weights predicted by the gnets.")
-
 parser.add_argument("--checkpoint", action="store_true",
                     help="Whether to store the model weights and optimizer.")
-
-parser.add_argument("--ignore_layers", type=str, default="",
-                    help="Which layers to ignore when compressing with the genomic bottleneck.")
 
 parser.add_argument("--transfer_layers", type=str, default="",
                     help="Which layers to transfer from the loaded model.")
@@ -122,33 +109,16 @@ else:
 
 
 # Determine mode of the experiment and set name
-init_with_gnets = not args.init_with_gnets
-enable_gnets = args.disable_gnets if not init_with_gnets else False
-if init_with_gnets:
-    logger.info(f"Initializing with g-net weights: {args.load_gnets}")
-    assert args.load_gnets is not None, "Please enter valid path for the g-nets."
-experiment_name = args.name if enable_gnets else args.name
-
-
-if init_with_gnets:
-    experiment_name = "gnetinit_" + experiment_name
-elif enable_gnets:
-    experiment_name = "GBT_" + experiment_name
-else:
-    experiment_name = "baseline_" + experiment_name
+experiment_name = "baseline_" + args.name
     
 
-# Set the model and gnet checkpoint paths
-fname = experiment_name + "_gnets_" + args.language + ".pth"
-GNET_CHCKPT_PATH  = os.path.join(base_config["dirs"]["save_gnets"], fname)
+# Set the model checkpoint path
 fname = experiment_name + "_model_" + args.language + ".pth"
 MODEL_CHCKPT_PATH  = os.path.join(base_config["dirs"]["save_model"], fname)
 
 
 # Check if the files already exist
 if rank == 0 and args.checkpoint:
-    if os.path.isfile(GNET_CHCKPT_PATH):
-        logger.warning(f"File {GNET_CHCKPT_PATH} already exists.")
     if os.path.isfile(MODEL_CHCKPT_PATH):
         logger.warning(f"File {MODEL_CHCKPT_PATH} already exists.")
 
@@ -172,8 +142,7 @@ logger.debug(f"Vocab size: {tokenizer.vocab_size}")
 
 def tokenize_function(element):
     outputs = tokenizer(element["text"], truncation=True, max_length=SEQ_LEN+1,
-                        return_overflowing_tokens=True, return_length=True
-                       )
+                        return_overflowing_tokens=True, return_length=True)
     
     input_batch = []
     for length, input_ids in zip(outputs["length"], outputs["input_ids"]):
@@ -250,48 +219,14 @@ if args.load_model is not None:
                     f"for weights {args.transfer_layers}")
 
 
-# Which layers to ignore when assigning gnets
-ignore_layers = [f".{l}." for l in args.ignore_layers.split(",")]
-experiment_config["gnets"]["ignore_layers"] += ignore_layers
-
-
-# Initialize the g-nets if applicable
-gnets = None
-if enable_gnets or init_with_gnets:
-    gnets = GenomicBottleneck(model, num_batches, **experiment_config["gnets"])
-
-
-# Load g-net weights if applicable and predict the weights
-if args.load_gnets is not None:
-    assert os.path.exists(args.load_gnets), f"File {args.load_gnets} does not exist."
-    logger.debug(f"Loading g-net weights from {args.load_gnets}.")
-    gnets.load(args.load_gnets)
-    logger.debug("Predicting weights...")
-    with torch.no_grad():
-        gnets.predict_weights()
-
-
-# Delete the g-nets after initialization if we only initialize the model with them
-if init_with_gnets:
-    logger.info("Deleting g-nets...")
-    gnets = None
-    enable_gnets = False
-
-
-# Calculate model num_params and compression factor if applicable
-num_params = sum(p.numel() for p in model.parameters())
-compression_factor = gnets.compression() if enable_gnets else 1.0
-
-
 # Other stuff that is required
 best_val_loss = float("inf")
 src_mask = generate_square_subsequent_mask(SEQ_LEN-1).to(rank)
 
 
 # Training function
-def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
-    if enable_gnets: gnets.train()
-    total_loss = 0
+def train(model: nn.Module) -> None:
+    total_loss = 0.0
     start_time = time.time()
     
     for data in tqdm(train_loader):
@@ -301,31 +236,15 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         data = torch.stack(data["input_ids"]).t().to(rank)
         optimizer.zero_grad()
 
-        if enable_gnets:
-            gnets.zero_grad()
-            gnets.predict_weights() # implicitly updates the model weights!
-
         output = model(data[:, :SEQ_LEN-1], src_mask)
         loss = criterion(output.view(-1, VOCAB_SIZE), data[:, 1:SEQ_LEN].reshape(-1))
 
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 0.25)
-        if enable_gnets: gnets.backward()
         
         optimizer.step()
         if scheduler is not None: scheduler.step()
-        if enable_gnets: gnets.step()
         
-        # if global_step % 1000 == 0 and rank == 0:
-        #     attn_map = model.module.transformer_encoder.layers[0].self_attn.in_proj_weight
-        #     plt.hist(attn_map.flatten().detach().cpu().numpy(), bins=100, range=(-0.12, 0.12))
-        #     plt.savefig(f"./hist/{experiment_name}_layer0_inprojweight_{global_step}.png")
-        #     plt.close()
-            
-        #     sns.heatmap(attn_map.detach().cpu().numpy(), vmin=-.12, vmax=.12)
-        #     plt.savefig(f"./heat/{experiment_name}_layer0_inprojweight_{global_step}.png")
-        #     plt.close()
-
         total_loss += loss.item()
         # Logging
         if global_step % LOG_INTERVAL == 0:
@@ -365,10 +284,6 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                 best_val_loss = val_loss
    
                 if args.checkpoint:
-                    if enable_gnets:
-                        logger.debug(f"Saving g-net weights under {GNET_CHCKPT_PATH}.")
-                        gnets.save(GNET_CHCKPT_PATH) 
-                
                     if rank == 0:
                         logger.debug(f"Saving model weights, optimizer,"
                                     f"seed and dataset state under {MODEL_CHCKPT_PATH}.")
@@ -409,50 +324,36 @@ val_loader = get_dataloader(tokenized_val_dataset, rank, world_size, BATCHSIZE)
 
 # Initialize metrics logging on rank 0
 if rank == 0:
-    logger.info(f"Number of model parameters: {num_params}")   
-    logger.info(f"g-net compression: {compression_factor}") 
     logger.info(f"validation loss {float(val_loss):5.2f} | "
                 f"validation ppl {val_ppl:8.2f}")
     
     run_config = {"commit_hash": commit_hash,
                   "batchsize": BATCHSIZE,
                   "language": args.language,
-                  "compression_factor": compression_factor,
-                  "num_params": num_params,
                   "ignored layers": args.ignore_layers,
                   "seed": args.seed,
-                  "world_size": world_size,
                   **experiment_config,
                   **base_config}
-
-    run_name = experiment_name + "_" + args.language
     
+    wandb.login(key=base_config["accounts"]["wandb_key"], 
+                host=base_config["accounts"]["wandb_address"])
+    
+    run_name = experiment_name + "_" + args.language
     log_dir = os.path.join(base_config["dirs"]["log"], run_name)
     
-    run_config = {"commit_hash": commit_hash,
-                  "batchsize": BATCHSIZE,
-                  "language": args.language,
-                  "compression_factor": compression_factor,
-                  "num_params": num_params,
-                  "ignored layers": args.ignore_layers,
-                  "seed": args.seed,
-                  **experiment_config,
-                  **base_config}
-    
-    wandb.login(key=base_config["key"]["wandb"], 
-                host="https://wandb.fz-juelich.de")
-    run_name = experiment_name + "_" + args.language
-    run = wandb.init(entity="ja-lohoff", project="GenomicBottleneck", 
-                    group="wikipedia", config=run_config, mode=args.wandb,
-                    dir=base_config["dirs"]["wandb"], name=run_name)
-
-    run.log({"validation_loss": val_loss, "val ppl": val_ppl})
+    run = wandb.init(entity=base_config["accounts"]["wandb_user"], 
+                     project="GenomicBottleneck", 
+                     group="wikipedia", 
+                     config=run_config, 
+                     mode=args.wandb,
+                     dir=base_config["dirs"]["wandb"],
+                     name=run_name)
 
 
 # Actual training loop
 for epoch in range(EPOCHS):
     dist.barrier()
-    train(model, gnets)
+    train(model)
     SEED += 1
     tokenized_train_dataset = tokenized_train_dataset.shuffle(seed=SEED)
     tokenized_val_dataset = tokenized_val_dataset.shuffle(seed=SEED)

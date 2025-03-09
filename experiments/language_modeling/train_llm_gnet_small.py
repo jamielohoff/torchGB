@@ -238,7 +238,7 @@ experiment_config["gnets"]["ignore_layers"] += ignore_layers
 # Load G-Net weights if applicable and predict the weights
 if args.load_gnets is not None:
     assert os.path.exists(args.load_gnets), f"File {args.load_gnets} does not exist."
-    logger.debug(f"Loading G-Net weights from {args.load_gnets}.")
+    logger.debug(f"Loading g-net weights from {args.load_gnets}.")
     gnets.load(args.load_gnets)
     logger.debug("Predicting weights...")
     with torch.no_grad():

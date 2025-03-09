@@ -147,7 +147,7 @@ class GenomicBottleneck(nn.Module):
                  hidden_dim: int = 32, lr: float = 0.001, 
                  gnet_batchsize: int = 10_000, 
                  ignore_layers: Sequence[str] = [],
-                 hypernet_type: str = "g-net") -> None:
+                 hypernet_type: str = "low_rank") -> None:
         super(GenomicBottleneck, self).__init__()             
         self.model = model
         self.lr = lr
