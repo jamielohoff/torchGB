@@ -1,3 +1,5 @@
+from typing import Sequence
+
 import numpy as np
 
 import torch
@@ -78,7 +80,7 @@ def init_conv2d_gnet(pname: str, param: Tensor, hidden_dim: int,
 
 
 def build_conv2d_gnet_output(name: str, param: Tensor, weights: Tensor,
-                             tile_shape) -> Tensor:
+                             tile_shape: Sequence[int]) -> Tensor:
     """
     Builds the output of a 2D convolutional operation using a GenomicBottleNet (g-net).
 
@@ -86,7 +88,7 @@ def build_conv2d_gnet_output(name: str, param: Tensor, weights: Tensor,
         name (str): The name of the parameter.
         param (Tensor): The kernel of the convolution.
         weights (Tensor): The weights of the convolution.
-        tile_shape (tuple): The shape of each tile in the convolution.
+        tile_shape (Sequence[int]): The shape of each tile in the convolution.
 
     Returns:
         Tensor: The output of the 2D convolutional operation using g-net.

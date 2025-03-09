@@ -98,14 +98,14 @@ def train(model: nn.Module, gnets: GenomicBottleneck):
         gnets.step()
 
         loss.item()
-        pbar.set_description(f"Loss: {loss.item():.2f}")
+        pbar.set_description(f"Loss: {loss.item()/BATCHSIZE:.2f}")
         
                                        
 # Evaluation function
 def evaluate(model: nn.Module):
     model.eval() # turn on evaluation mode
-    total_loss = 0
-    acc = 0
+    total_loss = 0.
+    acc = 0.
 
     with torch.no_grad():
         for data, targets in test_loader:

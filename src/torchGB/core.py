@@ -15,6 +15,8 @@ from .gnet import GenomicBottleNet
 from .layers.attn_gnet import init_attn_gnet, build_attn_gnet_output
 from .layers.conv_gnet import init_conv2d_gnet, build_conv2d_gnet_output
 from .layers.linear_gnet import init_linear_gnet, build_linear_gnet_output
+from .layers.matrix_decomposition import init_linear_low_rank, \
+                                    build_linear_low_rank_output
 
 
 # Stores how the compression is intended to work for different layer types
@@ -50,8 +52,10 @@ def register_gnet_type(mod_type: nn.Module, init: Callable[[nn.Module], None], b
     
     
 # TODO registering does not work as intended yet
+# looks like it does now...? @JLo find out if this now works as intended
 register_gnet_type(nn.TransformerEncoder, init_attn_gnet, build_attn_gnet_output)
-register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output)
+# register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output)
+register_gnet_type(nn.Linear, init_linear_low_rank, build_linear_low_rank_output)
 register_gnet_type(nn.Conv2d, init_conv2d_gnet, build_conv2d_gnet_output)
 
 

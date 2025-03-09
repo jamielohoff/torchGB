@@ -1,3 +1,5 @@
+from typing import Sequence
+
 import numpy as np
 
 import torch
@@ -79,7 +81,7 @@ def init_attn_gnet(pname: str, param: Tensor, hidden_dim: int,
 
 
 def build_attn_gnet_output(name: str, param: Tensor, weights: Tensor,
-                              tile_shape) -> Tensor:
+                           tile_shape: Sequence[int]) -> Tensor:
     """
     Builds the output structure of a GenomicBottleNet (g-net) for attention weights.
 
@@ -90,7 +92,7 @@ def build_attn_gnet_output(name: str, param: Tensor, weights: Tensor,
         name: The parameter name.
         param (Tensor): The attention weight matrix or linear weights.
         weights (Tensor): The weights of the g-net.
-        tile_shape: The tile shape for the g-net.
+        tile_shape (Sequence[int]): The tile shape for the g-net.
 
     Returns:
         Tensor: The output tensor of the g-net.
