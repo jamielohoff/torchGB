@@ -2,6 +2,8 @@ import os
 import sys
 import time
 import argparse
+from functools import partial
+
 from loguru import logger
 from tqdm import tqdm
 import wandb
@@ -18,7 +20,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 
 from _transformer import GPT, generate_square_subsequent_mask, predict_sequence
-from utils import (get_dataloader, load_model_layers, load_config, commit_to_experiments_branch)
+from utils import get_dataloader, load_model_layers, load_config, commit_to_experiments_branch
 
 parser = argparse.ArgumentParser()
 
@@ -106,13 +108,10 @@ if rank == 0 and args.no_commit:
     commit_hash = commit_to_experiments_branch(project_root)
 else:
     commit_hash = "placeholder_hash"
-
-
-# Determine mode of the experiment and set name
-experiment_name = "baseline_" + args.name
     
 
 # Set the model checkpoint path
+experiment_name = "baseline_" + args.name
 fname = experiment_name + "_model_" + args.language + ".pth"
 MODEL_CHCKPT_PATH  = os.path.join(base_config["dirs"]["save_model"], fname)
 
@@ -129,6 +128,7 @@ train_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language,
 
 val_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
                            cache_dir=cache_dir, split="train[95%:96%]")
+
 val_dataset = val_dataset.take(experiment_config["val_dataset_len"]//world_size)
 
 test_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
@@ -150,10 +150,11 @@ def tokenize_function(element):
             input_batch.append(input_ids)
     return {"input_ids": input_batch}
 
-
+# TODO: load dataset with path
 rm_cols = train_dataset.column_names
 tokenized_train_dataset = train_dataset.map(tokenize_function, batched=True, 
                                             num_proc=16, remove_columns=rm_cols)
+tokenized_train_dataset = tokenized_train_dataset.shuffle(seed=SEED)
 
 tokenized_val_dataset = val_dataset.map(tokenize_function, batched=True, 
                                         num_proc=16, remove_columns=rm_cols)
@@ -163,7 +164,7 @@ tokenized_test_dataset = test_dataset.map(tokenize_function, batched=True,
 
 
 num_batches = len(tokenized_train_dataset)*EPOCHS//(BATCHSIZE*world_size) + 1
-logger.debug(f"# batches in train dataset {num_batches}")
+logger.debug(f"Number of batches in train dataset: {num_batches}")
 
 train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, 
                               BATCHSIZE, stateful=True)
@@ -177,17 +178,15 @@ optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
 scheduler = None
 
 if args.scheduler:
-    # scheduler = optim.lr_scheduler.CyclicLR(optimizer, 1e-7, 2.5e-4, 
-    #                                         step_size_up=5000,
-    #                                         step_size_down=50_000)
-    # scheduler = optim.lr_scheduler.LinearLR(optimizer, 1e-2, 1., 2000)
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=experiment_config["lr"], 
+    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, 
+                                              max_lr=experiment_config["lr"], 
                                               pct_start=0.2, div_factor=250,
                                               final_div_factor=1000,
                                               total_steps=num_batches)
 
 
 # Dealing with custom model loading
+# TODO outsource this into an additional lib!
 if args.load_model is not None:
     assert os.path.exists(args.load_model), f"File {args.load_model} does not exist."
     map_loc = torch.device(rank)
@@ -200,7 +199,7 @@ if args.load_model is not None:
         
         tokenized_train_dataset.shuffle(seed=SEED)
         train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, 
-                                        BATCHSIZE, stateful=True)
+                                      BATCHSIZE, stateful=True)
         train_loader.load_state_dict(state_dict["dataloader"])
         
         logger.info(f"Loaded dataloader state from {args.load_model} "
@@ -216,17 +215,17 @@ if args.load_model is not None:
         layer_names = args.transfer_layers.split(",")
         load_model_layers(state_dict, model, optimizer, layer_names)
         logger.debug(f"Loaded model weights from {args.load_model} "
-                    f"for weights {args.transfer_layers}")
+                     f"for weights {args.transfer_layers}")
 
 
 # Other stuff that is required
 best_val_loss = float("inf")
-src_mask = generate_square_subsequent_mask(SEQ_LEN-1).to(rank)
+mask = generate_square_subsequent_mask(SEQ_LEN-1).to(rank)
 
 
 # Training function
 def train(model: nn.Module) -> None:
-    total_loss = 0.0
+    total_loss = 0
     start_time = time.time()
     
     for data in tqdm(train_loader):
@@ -234,17 +233,27 @@ def train(model: nn.Module) -> None:
         global global_step
         global_step += 1
         data = torch.stack(data["input_ids"]).t().to(rank)
+        
+        # Zeroing out the gradients
         optimizer.zero_grad()
+        
+        tokens = data[:, :SEQ_LEN-1]
+        output = model(tokens, mask)
+        
+        # Auto-regressive, unsupervised loss
+        logits = output.view(-1, VOCAB_SIZE)
+        labels = data[:, 1:SEQ_LEN].reshape(-1)
+        loss = criterion(logits, labels)
 
-        output = model(data[:, :SEQ_LEN-1], src_mask)
-        loss = criterion(output.view(-1, VOCAB_SIZE), data[:, 1:SEQ_LEN].reshape(-1))
-
+        # Backpropagate the error through the p-net and then through the g-nets
         loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), 0.25)
         
-        optimizer.step()
+        nn.utils.clip_grad_norm_(model.parameters(), 0.25) # what value to use here?
+        
+        # Do a gradient-descent step with the p-nets and then the g-nets
+        optimizer.step() # Need to still update the parameters that have no g-nets attached!
         if scheduler is not None: scheduler.step()
-        
+
         total_loss += loss.item()
         # Logging
         if global_step % LOG_INTERVAL == 0:
@@ -271,7 +280,7 @@ def train(model: nn.Module) -> None:
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
             val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
                
-            test_seq = predict_sequence("Star Trek", tokenizer, model, rank)
+            test_seq = predict_sequence("I seek glory", tokenizer, model, rank)
             
             if rank == 0:
                 logger.info("Output sequence: " + test_seq)
@@ -286,32 +295,38 @@ def train(model: nn.Module) -> None:
                 if args.checkpoint:
                     if rank == 0:
                         logger.debug(f"Saving model weights, optimizer,"
-                                    f"seed and dataset state under {MODEL_CHCKPT_PATH}.")
+                                     f"seed and dataset state under {MODEL_CHCKPT_PATH}.")
                         param_dict = {"seed": SEED,
-                                    "model": model.state_dict(),
-                                    "optimizer": optimizer.state_dict(),
-                                    "dataloader": train_loader.state_dict()}
+                                      "model": model.state_dict(),
+                                      "optimizer": optimizer.state_dict(),
+                                      "dataloader": train_loader.state_dict()}
                         torch.save(param_dict, MODEL_CHCKPT_PATH)
                     else:
+                        # Put other processes to sleep while logging...good night!
                         time.sleep(1)
 
 
 # Evaluation function
 def evaluate(model: nn.Module, eval_loader) -> torch.Tensor:
     model.eval() # turn on evaluation mode
-    total_loss, count = 0, 0
-    global src_mask
+    total_loss, norm = 0, 0
+    global mask
     with torch.no_grad():
         start_time = time.time()
         for data in eval_loader:
             data = torch.stack(data["input_ids"]).t().to(rank)
             seq_len = min(SEQ_LEN, data.size(1))
-            output = model(data[:, :seq_len-1], src_mask[:seq_len-1, :seq_len-1])
-            output_flat = output.view(-1, VOCAB_SIZE)
-            total_loss += criterion(output_flat, data[:, 1:seq_len].reshape(-1)).item()
-            count += 1
+            
+            tokens = data[:, :seq_len-1]
+            _mask = mask[:seq_len-1, :seq_len-1]
+            output = model(tokens, _mask)
+            
+            logits = output.view(-1, VOCAB_SIZE)
+            labels = data[:, 1:seq_len].reshape(-1)
+            total_loss += criterion(logits, labels).item()
+            norm += 1
     logger.info(f"Validation time: {time.time() - start_time}")
-    return torch.tensor([total_loss / count]).to(rank)
+    return torch.tensor([total_loss / norm]).to(rank)
 
 
 # Compute initial validation loss
@@ -330,7 +345,6 @@ if rank == 0:
     run_config = {"commit_hash": commit_hash,
                   "batchsize": BATCHSIZE,
                   "language": args.language,
-                  "ignored layers": args.ignore_layers,
                   "seed": args.seed,
                   **experiment_config,
                   **base_config}
@@ -349,16 +363,21 @@ if rank == 0:
                      dir=base_config["dirs"]["wandb"],
                      name=run_name)
 
+    run.log({"validation_loss": val_loss, "val ppl": val_ppl})
+
+loader = partial(get_dataloader, tokenized_train_dataset, rank, world_size, BATCHSIZE)
 
 # Actual training loop
 for epoch in range(EPOCHS):
     dist.barrier()
     train(model)
     SEED += 1
+    
     tokenized_train_dataset = tokenized_train_dataset.shuffle(seed=SEED)
     tokenized_val_dataset = tokenized_val_dataset.shuffle(seed=SEED)
-    train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, BATCHSIZE, stateful=True)
-    val_loader = get_dataloader(tokenized_val_dataset, rank, world_size, BATCHSIZE)
+    
+    train_loader = loader(stateful=True)
+    val_loader = loader()
 
 
 # Evaluate the best model on the test dataset

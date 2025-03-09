@@ -175,7 +175,7 @@ tokenized_test_dataset = test_dataset.map(tokenize_function, batched=True,
 
 
 num_batches = len(tokenized_train_dataset)*EPOCHS//(BATCHSIZE*world_size) + 1
-logger.debug(f"Number of batches in train dataset {num_batches}")
+logger.debug(f"Number of batches in train dataset: {num_batches}")
 
 train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, 
                               BATCHSIZE, stateful=True)
@@ -235,7 +235,7 @@ ignore_layers = [f".{l}." for l in args.ignore_layers.split(",")]
 experiment_config["gnets"]["ignore_layers"] += ignore_layers
 
 
-# Load G-Net weights if applicable and predict the weights
+# Load g-net weights if applicable and predict the weights
 if args.load_gnets is not None:
     assert os.path.exists(args.load_gnets), f"File {args.load_gnets} does not exist."
     logger.debug(f"Loading g-net weights from {args.load_gnets}.")
@@ -411,8 +411,8 @@ if rank == 0:
     run.log({"validation_loss": val_loss, "val ppl": val_ppl})
 
 
-
 loader = partial(get_dataloader, tokenized_train_dataset, rank, world_size, BATCHSIZE)
+
 # Actual training loop
 for epoch in range(EPOCHS):
     dist.barrier()
