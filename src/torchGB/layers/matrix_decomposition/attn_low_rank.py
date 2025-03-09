@@ -5,12 +5,12 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from .linear_gnet import linear_gnet_layer
-from ..gnet import GenomicBottleNet, GNetLayerTuple
-from ..utils import EncodingType, make_row_col_encoding, ceil, cut_matrix, build_matrix
+from .linear_low_rank import linear_low_rank_layer
+from .low_rank import LowRankMatrixDecompositionGNet
+from ...utils import ceil, cut_matrix, build_matrix
 
 
-def attn_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GNetLayerTuple:
+def attn_low_rank_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int):
     """
     Creates a GenomicBottleNet (g-net) for attention weights.
     Subdivides the attention weight matrix into three similar parts Wq, Wk, Wv
@@ -33,27 +33,22 @@ def attn_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GNet
     num_col_tiles = ceil(param.shape[1] / tile_size)
 
     # Treat 2D weight as fully connected
-    num_encoding_bits = ceil(np.log([tile_size, tile_size]) / np.log(2))
-    num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
-    encoding_type = (EncodingType.BINARY, EncodingType.BINARY)
-    row_col_encoding = make_row_col_encoding(tile_shape, encoding_type,
-                                             num_encoding_bits)
-    num_inputs = row_col_encoding.shape[-1]
+    row_col_encoding = torch.zeros((gnet_batchsize, 1))
 
     # Normalizes the output to follow the initial parameter
     # distribution at initialization of the model
     with torch.no_grad():
         output_scale = torch.std(param.data)
 
-    gnet_sizes = (num_inputs, hidden_dim, 2)
-    gnets = [GenomicBottleNet(gnet_sizes, output_scale)
+    gnet_sizes = (tile_size, tile_size)
+    gnets = [LowRankMatrixDecompositionGNet(gnet_sizes, rank=hidden_dim)
             for _ in range(num_row_tiles*num_col_tiles)] # add 3*
 
     return row_col_encoding, gnets, tile_shape, output_scale
 
 
-def init_attn_gnet(pname: str, param: Tensor, hidden_dim: int,
-                   gnet_batchsize: int) -> GNetLayerTuple:
+def init_attn_low_rank(pname: str, param: Tensor, hidden_dim: int,
+                       gnet_batchsize: int):
     """
     Initializes a GenomicBottleNet (g-net) for attention weights.
 
@@ -72,16 +67,16 @@ def init_attn_gnet(pname: str, param: Tensor, hidden_dim: int,
             of g-nets, the tile shape, and the output scale factor.
     """
     if "in_proj_weight" in pname:
-        return attn_gnet_layer(param, hidden_dim, gnet_batchsize)
+        return attn_low_rank_layer(param, hidden_dim, gnet_batchsize)
 
     elif "weight" in pname and len(param.shape) == 2:
-        return linear_gnet_layer(param, hidden_dim, gnet_batchsize)
+        return linear_low_rank_layer(param, hidden_dim, gnet_batchsize)
     else:
         return None
 
 
-def build_attn_gnet_output(name: str, param: Tensor, weights: Tensor,
-                           tile_shape: Sequence[int]) -> Tensor:
+def build_attn_low_rank_output(name: str, param: Tensor, weights: Tensor,
+                               tile_shape: Sequence[int]) -> Tensor:
     """
     Builds the output structure of a GenomicBottleNet (g-net) for attention weights.
 

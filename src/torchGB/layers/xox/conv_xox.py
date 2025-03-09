@@ -5,11 +5,13 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..gnet import GenomicBottleNet, GNetLayerTuple
-from ..utils import EncodingType, make_row_col_encoding, ceil, cut_matrix, build_4d_kernel
+from .xox import XOXLayer
+from ...utils import ceil, cut_matrix, build_4d_kernel
 
+# TODO: write docstrings
+# TODO: fix scalings and input sizes
 
-def conv2d_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GNetLayerTuple:
+def conv2d_xox_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int):
     """
     Creates a GenomicBottleNet (g-net) layer for 2D convolution.
 
@@ -32,32 +34,21 @@ def conv2d_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GN
     # Define the tile shape and encoding type
     tile_shape = (tile_size, tile_size, param.shape[2], param.shape[3])
 
-    # Calculate the number of bits needed for encoding
-    num_encoding_bits = ceil(np.log(tile_shape)/np.log(2))
-    num_encoding_bits[2:] = tile_shape[2:]
-    num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
-
-    # Define the encoding type (binary, one-hot)
-    encoding_type = (EncodingType.BINARY, EncodingType.BINARY,
-                     EncodingType.ONEHOT, EncodingType.ONEHOT)
-
     # Create the row-col encoding
-    row_col_encoding = make_row_col_encoding(tile_shape, encoding_type,
-                                             num_encoding_bits)
-    num_inputs = row_col_encoding.shape[-1]
+    row_col_encoding = torch.zeros((gnet_batchsize, 1))
 
     # Normalize the output to follow the initial parameter distribution at initialization of the model
     with torch.no_grad():
         output_scale = torch.std(param.data)
 
-    gnet_sizes = (num_inputs, hidden_dim, 2)
-    gnets = [GenomicBottleNet(gnet_sizes, output_scale)
+    gnet_sizes = (tile_size*param.shape[2], tile_size*param.shape[3])
+    gnets = [XOXLayer(*gnet_sizes, num_genes=hidden_dim)
             for _ in range(num_row_tiles*num_col_tiles)]
     return row_col_encoding, gnets, tile_shape, output_scale
 
 
-def init_conv2d_gnet(pname: str, param: Tensor, hidden_dim: int,
-                     gnet_batchsize: int) -> GNetLayerTuple:
+def init_conv2d_xox(pname: str, param: Tensor, hidden_dim: int,
+                    gnet_batchsize: int):
     """
     Initializes a GenomicBottleNet (g-net) for a 2D convolutional operation.
 
@@ -73,13 +64,13 @@ def init_conv2d_gnet(pname: str, param: Tensor, hidden_dim: int,
             of conv2d_gnet_layer. Otherwise, it returns None.
     """
     if "weight" in pname:
-        return conv2d_gnet_layer(param, hidden_dim, gnet_batchsize)
+        return conv2d_xox_layer(param, hidden_dim, gnet_batchsize)
 
     else:
         return None
 
 
-def build_conv2d_gnet_output(name: str, param: Tensor, weights: Tensor,
+def build_conv2d_xox_output(name: str, param: Tensor, weights: Tensor,
                              tile_shape: Sequence[int]) -> Tensor:
     """
     Builds the output of a 2D convolutional operation using a GenomicBottleNet (g-net).
@@ -97,7 +88,8 @@ def build_conv2d_gnet_output(name: str, param: Tensor, weights: Tensor,
     num_col_tiles = ceil(param.shape[1]/tile_shape[1])
 
     # Define the shape of the output
-    shape = (num_row_tiles*tile_shape[0], num_col_tiles*tile_shape[1],
+    shape = (num_row_tiles*tile_shape[0], 
+             num_col_tiles*tile_shape[1],
              param.shape[2], param.shape[3])
 
     # Build the 4D kernel and cut it to match the input shape
