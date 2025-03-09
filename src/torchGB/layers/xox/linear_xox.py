@@ -5,12 +5,12 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from .low_rank import LowRankMatrixDecompositionGNet
+from .xox import XOXLayer
 from ...utils import ceil, cut_matrix, build_matrix
 
 # TODO: Fix documentation
 
-def linear_low_rank_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int):
+def linear_xox_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int):
     """
     Calculates the number of square tiles of size `gnet_batchsize` we need to
     completely cover the weight matrix. This function is usually used to initialize
@@ -44,14 +44,14 @@ def linear_low_rank_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int):
         output_scale = torch.std(param.data)   
 
     gnet_sizes = tile_shape
-    gnets = [LowRankMatrixDecompositionGNet(gnet_sizes, rank=hidden_dim) 
+    gnets = [XOXLayer(*gnet_sizes, num_genes=hidden_dim) 
              for _ in range(num_row_tiles*num_col_tiles)]     
     
     return row_col_encoding, gnets, tile_shape, output_scale
 
 
-def init_linear_low_rank(pname: str, param: Tensor, hidden_dim: int,
-                         gnet_batchsize: int):
+def init_linear_xox(pname: str, param: Tensor, hidden_dim: int,
+                    gnet_batchsize: int):
     """
     Initializes a GenomicBottleNet (g-net) for a linear layer.
 
@@ -69,13 +69,13 @@ def init_linear_low_rank(pname: str, param: Tensor, hidden_dim: int,
             the g-net, the shape of a single tile and the scale of the outputs.
     """
     if "weight" in pname:
-        return linear_low_rank_layer(param, hidden_dim, gnet_batchsize)
+        return linear_xox_layer(param, hidden_dim, gnet_batchsize)
     else:
         return None
 
 
-def build_linear_low_rank_output(name: str, param: Tensor, weights: Tensor, 
-                                 tile_shape: Sequence[int]) -> Tensor:
+def build_linear_xox_output(name: str, param: Tensor, weights: Tensor, 
+                            tile_shape: Sequence[int]) -> Tensor:
     """
     Builds the output of a linear layer using a GenomicBottleNet (g-net).
 
