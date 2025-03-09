@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from .low_rank import LowRankMatrixDecompositionGNet
+from .model import LowRankMatrixDecompositionGNet
 from ...utils import ceil, cut_matrix, build_matrix
 
 # TODO: Fix documentation

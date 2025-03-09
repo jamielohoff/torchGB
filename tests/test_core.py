@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.distributed as dist
 
 from src.torchGB.core import GenomicBottleneck, register_gnet_type
-from torchGB.layers.gnet.gnet import GenomicBottleNet
+from torchGB.layers.gnet.model import GenomicBottleNet
 
 class MockModule(nn.Module):
     def __init__(self):

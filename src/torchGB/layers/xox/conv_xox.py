@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from .xox import XOXLayer
+from .model import XOXLayer
 from ...utils import ceil, cut_matrix, build_4d_kernel
 
 # TODO: write docstrings
@@ -96,3 +96,4 @@ def build_conv2d_xox_output(name: str, param: Tensor, weights: Tensor,
     new_weights = build_4d_kernel(weights, shape)
     new_weights = cut_matrix(new_weights, param.shape)
     return new_weights
+

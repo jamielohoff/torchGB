@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from .xox import XOXLayer
+from .model import XOXLayer
 from ...utils import ceil, cut_matrix, build_matrix
 
 # TODO: Fix documentation

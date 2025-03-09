@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from .gnet import GenomicBottleNet, GNetLayerTuple
+from .model import GenomicBottleNet, GNetLayerTuple
 from ...utils import EncodingType, make_row_col_encoding, ceil, cut_matrix, build_4d_kernel
 
 

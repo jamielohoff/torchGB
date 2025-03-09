@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 
 from .linear_gnet import linear_gnet_layer
-from .gnet import GenomicBottleNet, GNetLayerTuple
+from .model import GenomicBottleNet, GNetLayerTuple
 from ...utils import EncodingType, make_row_col_encoding, ceil, cut_matrix, build_matrix
 
 

@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 
 from .linear_low_rank import linear_low_rank_layer
-from .low_rank import LowRankMatrixDecompositionGNet
+from .model import LowRankMatrixDecompositionGNet
 from ...utils import ceil, cut_matrix, build_matrix
 
 
@@ -104,4 +104,5 @@ def build_attn_low_rank_output(name: str, param: Tensor, weights: Tensor,
 
     new_weights = build_matrix(weights, shape)
     new_weights = cut_matrix(new_weights, param.shape)
-    return new_weights 
+    return new_weights
+

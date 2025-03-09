@@ -1,4 +1,4 @@
-from .low_rank import LowRankMatrixDecompositionGNet
+from .model import LowRankMatrixDecompositionGNet
 from .attn_low_rank import init_attn_low_rank, build_attn_low_rank_output
 from .conv_low_rank import init_conv2d_low_rank, build_conv2d_low_rank_output
 from .linear_low_rank import init_linear_low_rank, build_linear_low_rank_output

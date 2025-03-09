@@ -10,18 +10,25 @@ import torch.optim as optim
 import torch.distributed as dist
 from torch import Tensor
 
-from .layers.gnet.gnet import GenomicBottleNet
-
 from .layers.gnet.attn_gnet import init_attn_gnet, build_attn_gnet_output
 from .layers.gnet.conv_gnet import init_conv2d_gnet, build_conv2d_gnet_output
 from .layers.gnet.linear_gnet import init_linear_gnet, build_linear_gnet_output
 from .layers.matrix_decomposition import init_linear_low_rank, \
-                                    build_linear_low_rank_output
+                                         build_linear_low_rank_output
 from .layers.xox import init_linear_xox, build_linear_xox_output
 
 
 # Stores how the compression is intended to work for different layer types
 gnet_types = {}
+
+
+# TODO: write this as an abstract interface class
+class HyperNetwork(nn.Module):
+    def __init__() -> None:
+        super().__init__()
+    def forward(self) -> Tensor:
+        pass
+
 
 @dataclass
 class GNetType:
@@ -39,7 +46,8 @@ class GNetType:
     build: Callable
     
 
-def register_gnet_type(mod_type: nn.Module, init: Callable[[nn.Module], None], build: Callable[[nn.Module], None]) -> None:
+def register_gnet_type(mod_type: nn.Module, init: Callable[[nn.Module], None], 
+                       build: Callable[[nn.Module], None]) -> None:
     """
     This function registers a new g-net type to be used in the Genomic Bottleneck.
 
@@ -50,7 +58,7 @@ def register_gnet_type(mod_type: nn.Module, init: Callable[[nn.Module], None], b
     """
     global gnet_types
     gnet_types[mod_type] = GNetType(str(mod_type), init, build)
-    
+
     
 # TODO registering does not work as intended yet
 # looks like it does now...? @JLo find out if this now works as intended
@@ -85,7 +93,7 @@ class GNetLayer:
     name: str
     rank: int
     tile_shape: Optional[Sequence[int]] = None
-    gnets: Optional[Sequence[GenomicBottleNet]] = None
+    gnets: Optional[Sequence[HyperNetwork]] = None
     optimizers: Optional[Sequence[optim.Optimizer]] = None
     schedulers: Optional[optim.lr_scheduler.LRScheduler] = None
     gnet_input: Optional[Sequence[Tensor]] = None
@@ -108,7 +116,7 @@ class GenomicBottleneck(nn.Module):
     Thus the g-net predicts the value of a single weight of the matrix, but we 
     can parallelize the process by batching across the all the weights and
     reshaping the resulting output into the weight tensor.
-    When launched with the torchrun -nproc_per_node='num_gpus' command, 
+    When launched with the torchrun --nproc_per_node='num_gpus' command, 
     every g-net is stored on a different device to parallelize the computation. 
     Furthermore, every g-net has its own optimizer.
     Gradients are backpropagated by first backpropagating the gradients through
@@ -162,8 +170,7 @@ class GenomicBottleneck(nn.Module):
                         # Here we initialize the g-net for specific layer types
                         if device_id == dist.get_rank():
                             out_fn = gnet_type.init
-                            out = out_fn(pname, param, hidden_dim, 
-                                            gnet_batchsize)
+                            out = out_fn(pname, param, hidden_dim, gnet_batchsize)
                             if out_fn:
                                 self._add_gnets(_name, device_id, param, *out)
                             
@@ -340,8 +347,7 @@ class GenomicBottleneck(nn.Module):
                         gnet_type = gnet_types.get(type(mod))
                         if gnet_type:
                             weights_fn = gnet_type.build
-                            new_weights = weights_fn(_name, param, new_weights, 
-                                                     tile_shape)
+                            new_weights = weights_fn(_name, param, new_weights, tile_shape)
                             
                             # When cutting the matrix, it's not contiguous anymore,
                             # but we need it to be contiguous for broadcasting
@@ -409,7 +415,7 @@ class GenomicBottleneck(nn.Module):
                     # scheduler.step()
                     
     def _add_gnets(self, name: str, device_id: int, param: Tensor,
-                   row_col_encodings: Tensor, gnets: GenomicBottleNet, 
+                   row_col_encodings: Tensor, gnets: HyperNetwork, 
                    tile_shape: Tuple[int, int], output_scale: float,
                    grad_scale: Optional[float] = 1.) -> None:
         """
@@ -421,7 +427,7 @@ class GenomicBottleneck(nn.Module):
             param (Tensor): The parameter tensor of the layer.
             row_col_encodings (torch.Tensor): The row and column encodings of 
                 the parameter matrix.
-            gnets (Sequence[GenomicBottleNet]): The g-net model.
+            gnets (Sequence[HyperNetwork]): The g-net model.
             tile_shape (Tuple[int, int]): The shape of the tiles used to 
                 predict the weights of the layer.
             output_scale (float): The scaling factor for the g-net output.
