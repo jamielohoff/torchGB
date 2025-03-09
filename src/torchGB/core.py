@@ -55,9 +55,9 @@ def register_gnet_type(mod_type: nn.Module, init: Callable[[nn.Module], None], b
 # TODO registering does not work as intended yet
 # looks like it does now...? @JLo find out if this now works as intended
 register_gnet_type(nn.TransformerEncoder, init_attn_gnet, build_attn_gnet_output)
-# register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output)
+register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output)
 # register_gnet_type(nn.Linear, init_linear_low_rank, build_linear_low_rank_output)
-register_gnet_type(nn.Linear, init_linear_xox, build_linear_xox_output)
+# register_gnet_type(nn.Linear, init_linear_xox, build_linear_xox_output)
 register_gnet_type(nn.Conv2d, init_conv2d_gnet, build_conv2d_gnet_output)
 
 
