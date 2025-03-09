@@ -1,4 +1,4 @@
-from .core import GenomicBottleneck, GenomicBottleNet
+from .core import GenomicBottleneck
 
 import sys
 

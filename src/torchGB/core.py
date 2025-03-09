@@ -10,12 +10,10 @@ import torch.optim as optim
 import torch.distributed as dist
 from torch import Tensor
 
-from .layers.gnet.attn_gnet import init_attn_gnet, build_attn_gnet_output
-from .layers.gnet.conv_gnet import init_conv2d_gnet, build_conv2d_gnet_output
-from .layers.gnet.linear_gnet import init_linear_gnet, build_linear_gnet_output
-from .layers.matrix_decomposition import init_linear_low_rank, \
-                                         build_linear_low_rank_output
-from .layers.xox import init_linear_xox, build_linear_xox_output
+# Terrible style...@JLo fix this!
+from .layers.gnet import *
+from .layers.matrix_decomposition import *
+from .layers.xox import *
 
 
 # Stores how the compression is intended to work for different layer types
@@ -59,15 +57,25 @@ def register_gnet_type(mod_type: nn.Module, init: Callable[[nn.Module], None],
     global gnet_types
     gnet_types[mod_type] = GNetType(str(mod_type), init, build)
 
-    
-# TODO registering does not work as intended yet
-# looks like it does now...? @JLo find out if this now works as intended
-register_gnet_type(nn.TransformerEncoder, init_attn_gnet, build_attn_gnet_output)
-register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output)
-# register_gnet_type(nn.Linear, init_linear_low_rank, build_linear_low_rank_output)
-# register_gnet_type(nn.Linear, init_linear_xox, build_linear_xox_output)
-register_gnet_type(nn.Conv2d, init_conv2d_gnet, build_conv2d_gnet_output)
 
+# TODO: can we make this prettier?
+def register_hypernet_type(hypernet_type: str):
+    if hypernet_type == "g-net":
+        register_gnet_type(nn.TransformerDecoder, init_attn_gnet, build_attn_gnet_output)
+        register_gnet_type(nn.Conv2d, init_conv2d_gnet, build_conv2d_gnet_output)
+        register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output)
+    elif hypernet_type == "low_rank":
+        register_gnet_type(nn.TransformerDecoder, init_attn_low_rank, build_attn_low_rank_output)
+        register_gnet_type(nn.Conv2d, init_conv2d_low_rank, build_conv2d_low_rank_output)
+        register_gnet_type(nn.Linear, init_linear_low_rank, build_linear_low_rank_output)
+    elif hypernet_type == "xox":
+        register_gnet_type(nn.TransformerDecoder, init_attn_xox, build_attn_xox_output)
+        register_gnet_type(nn.Conv2d, init_conv2d_xox, build_conv2d_xox_output)
+        register_gnet_type(nn.Linear, init_linear_xox, build_linear_xox_output)
+
+    else:
+        raise ValueError(f"HyperNetwork type {hypernet_type} not recognized.")
+    
 
 @dataclass
 class GNetLayer:
@@ -125,7 +133,6 @@ class GenomicBottleneck(nn.Module):
 
     Args:
         model (nn.Module): The neural network model.
-        num_batches (int): The number of batches in the training loop.
         hidden_dim (int): The size of the hidden layers in the g-nets.
         lr (float): The learning rate of the g-nets.
         gnet_batchsize (int): The number of parameters per tile.
@@ -137,14 +144,16 @@ class GenomicBottleneck(nn.Module):
     model: nn.Module
     gnetdict: Dict[str, GNetLayer]
     
-    def __init__(self, model: nn.Module, num_batches: int = 0, 
+    def __init__(self, model: nn.Module,
                  hidden_dim: int = 32, lr: float = 0.001, 
                  gnet_batchsize: int = 10_000, 
-                 ignore_layers: Sequence[str] = []) -> None:
+                 ignore_layers: Sequence[str] = [],
+                 hypernet_type: str = "g-net") -> None:
         super(GenomicBottleneck, self).__init__()             
         self.model = model
         self.lr = lr
-        self.num_batches = num_batches
+        
+        register_hypernet_type(hypernet_type)
         
         # Stores all the information about the gnets
         self.gnetdict = {}
@@ -398,9 +407,8 @@ class GenomicBottleneck(nn.Module):
         object that matches the current process rank, it performs an 
         optimization step using the optimizers associated with that network.
 
-        Note:
-            - The function currently only steps the optimizers and not the 
-                schedulers, as the scheduler step code is commented out.
+        NOTE: The function currently only steps the optimizers and not the 
+        schedulers, as the scheduler step code is commented out.
 
         Attributes:
             gnetdict (dict): A dictionary where keys are network names and values 
@@ -448,14 +456,13 @@ class GenomicBottleneck(nn.Module):
         scheduler = lambda opt: optim.lr_scheduler.LinearLR(opt, start_factor=1, end_factor=1)
         schedulers = None # [scheduler(opt) for opt in optimizers]
         
-        grad_scale = 1. # placeholder value; never used
         self.gnetdict[name] = GNetLayer(name=name, rank=device_id,
                                         tile_shape=tile_shape, gnets=gnets,
                                         optimizers=optimizers,
                                         schedulers=schedulers,
                                         gnet_input=row_col_encodings,
                                         weights=param.data,
-                                        grad_scale=grad_scale)
+                                        grad_scale=1.0)
         
         print(f"Creating g-net for layer: {name}\n"
               f"Layer size: {param.shape}\n"

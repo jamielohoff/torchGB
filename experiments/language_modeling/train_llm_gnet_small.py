@@ -183,7 +183,7 @@ train_loader = get_dataloader(tokenized_train_dataset, rank, world_size,
 # Initialize the model and optimizers
 model = GPT(**experiment_config["model"]).to(rank)
 model = DDP(model, device_ids=[rank], output_device=rank)
-gnets = GenomicBottleneck(model, num_batches, **experiment_config["gnets"])
+gnets = GenomicBottleneck(model, **experiment_config["gnets"])
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
