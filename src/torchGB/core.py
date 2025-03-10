@@ -44,23 +44,23 @@ class GNetType:
     build: Callable
     
 
-def register_gnet_type(mod_type: nn.Module, init: Callable[[nn.Module], None], 
+def register_gnet_type(module: nn.Module, init: Callable[[nn.Module], None], 
                        build: Callable[[nn.Module], None]) -> None:
     """
     This function registers a new g-net type to be used in the Genomic Bottleneck.
 
     Args:
-        mod_type (nn.Module): The type of module for which to register the g-net.
+        module (nn.Module): The type of module for which to register the g-net.
         init (Callable[[nn.Module], None]): A function that initializes the weights and bias of the layer.
         build (Callable[[nn.Module], None]): A function that builds the output structure of the layer.
     """
     global gnet_types
-    gnet_types[mod_type] = GNetType(str(mod_type), init, build)
+    gnet_types[module] = GNetType(str(module), init, build)
 
 
 # TODO: can we make this prettier?
-def register(hypernet_type: str):
-    if hypernet_type == "g-net":
+def register(hypernet_type: str) -> None:
+    if hypernet_type == "g-net" or hypernet_type == "gnet":
         register_gnet_type(nn.TransformerEncoder, init_attn_gnet, build_attn_gnet_output)
         register_gnet_type(nn.Conv2d, init_conv2d_gnet, build_conv2d_gnet_output)
         register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output)
@@ -147,7 +147,7 @@ class GenomicBottleneck(nn.Module):
                  hidden_dim: int = 32, lr: float = 0.001, 
                  gnet_batchsize: int = 10_000, 
                  ignore_layers: Sequence[str] = [],
-                 hypernet_type: str = "low_rank") -> None:
+                 hypernet_type: str = "g-net") -> None:
         super(GenomicBottleneck, self).__init__()             
         self.model = model
         self.lr = lr
@@ -460,8 +460,7 @@ class GenomicBottleneck(nn.Module):
                                         optimizers=optimizers,
                                         schedulers=schedulers,
                                         gnet_input=row_col_encodings,
-                                        weights=param.data,
-                                        grad_scale=1.0)
+                                        weights=param.data, grad_scale=1.0)
         
         print(f"Creating g-net for layer: {name}\n"
               f"Layer size: {param.shape}\n"
