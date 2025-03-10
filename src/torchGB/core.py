@@ -59,7 +59,7 @@ def register_gnet_type(mod_type: nn.Module, init: Callable[[nn.Module], None],
 
 
 # TODO: can we make this prettier?
-def register_hypernet_type(hypernet_type: str):
+def register(hypernet_type: str):
     if hypernet_type == "g-net":
         register_gnet_type(nn.TransformerEncoder, init_attn_gnet, build_attn_gnet_output)
         register_gnet_type(nn.Conv2d, init_conv2d_gnet, build_conv2d_gnet_output)
@@ -152,7 +152,7 @@ class GenomicBottleneck(nn.Module):
         self.model = model
         self.lr = lr
         
-        register_hypernet_type(hypernet_type)
+        register(hypernet_type)
         
         # Stores all the information about the gnets
         self.gnetdict = {}
