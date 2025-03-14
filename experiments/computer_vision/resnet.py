@@ -3,7 +3,7 @@ import torchvision
 import torchvision.transforms as transforms
 import numpy as np
 import os
-import core as gn
+import torchGB.core_fast as gn
 
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -11,7 +11,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 def trainE2E(model, rank, train_loader, optimizer, GNets):
     criterion = torch.nn.CrossEntropyLoss()
-    correct = 0;
+    correct = 0
     
     model.train()
     GNets.train() 
@@ -51,7 +51,7 @@ def trainE2E(model, rank, train_loader, optimizer, GNets):
     return train_acc
 
 def testResNet(model, rank, val_loader):
-    correct = 0;
+    correct = 0
     # model.eval()
     with torch.no_grad():
         for batch_idx, (inputs, labels) in enumerate(val_loader):

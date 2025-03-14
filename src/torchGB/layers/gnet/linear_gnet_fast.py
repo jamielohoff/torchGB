@@ -5,12 +5,12 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from .model import XOXLayer
-from ...utils import ceil, crop_matrix, build_matrix
+from .model import FastGenomicBottleNet, GNetLayerTuple
+from ...utils import EncodingType, make_row_col_encoding, ceil, crop_matrix, build_matrix
 
-# TODO: Fix documentation
 
-def linear_xox_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int):
+def fast_linear_gnet_layer(param: Tensor, hidden_dim: int, 
+                           gnet_batchsize: int, tiles_batchsize: int) -> GNetLayerTuple:
     """
     Calculates the number of square tiles of size `gnet_batchsize` we need to
     completely cover the weight matrix. This function is usually used to initialize
@@ -33,25 +33,31 @@ def linear_xox_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int):
     """
     tile_size = ceil(np.sqrt(gnet_batchsize))
     tile_shape = (tile_size, tile_size)
-    num_row_tiles = ceil(param.shape[0]/tile_size)
-    num_col_tiles = ceil(param.shape[1]/tile_size)
-
-    row_col_encoding = torch.zeros((gnet_batchsize, 1))
+    num_row_tiles = ceil(param.shape[0] / tile_size)
+    num_col_tiles = ceil(param.shape[1] / tile_size)
+    
+    num_encoding_bits = ceil(np.log([tile_size, tile_size]) / np.log(2))
+    num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
+    encoding_type = (EncodingType.BINARY, EncodingType.BINARY)
+    
+    row_col_encoding = make_row_col_encoding(tile_shape, encoding_type, 
+                                             num_encoding_bits)
+    num_inputs = row_col_encoding.shape[-1]
     
     # Normalizes the output to follow the initial parameter
     # distribution at initialization of the model       
     with torch.no_grad():
         output_scale = torch.std(param.data)   
 
-    gnet_sizes = tile_shape
-    gnets = [XOXLayer(*gnet_sizes, num_genes=hidden_dim) 
+    gnet_sizes = (num_inputs, hidden_dim, 1)
+    gnets = [FastGenomicBottleNet(tiles_batchsize, gnet_sizes, output_scale) 
              for _ in range(num_row_tiles*num_col_tiles)]     
     
-    return row_col_encoding, gnets, tile_shape, output_scale
+    return row_col_encoding, gnets, tiles_batchsize, tile_shape, output_scale
 
 
-def init_linear_xox(pname: str, param: Tensor, hidden_dim: int,
-                    gnet_batchsize: int):
+def init_linear_gnet(pname: str, param: Tensor, hidden_dim: int,
+                     gnet_batchsize: int) -> GNetLayerTuple:
     """
     Initializes a GenomicBottleNet (g-net) for a linear layer.
 
@@ -69,13 +75,13 @@ def init_linear_xox(pname: str, param: Tensor, hidden_dim: int,
             the g-net, the shape of a single tile and the scale of the outputs.
     """
     if "weight" in pname:
-        return linear_xox_layer(param, hidden_dim, gnet_batchsize)
+        return fast_linear_gnet_layer(param, hidden_dim, gnet_batchsize)
     else:
         return None
 
 
-def build_linear_xox_output(name: str, param: Tensor, weights: Tensor, 
-                            tile_shape: Sequence[int]) -> Tensor:
+def build_linear_gnet_output(name: str, param: Tensor, weights: Tensor, 
+                             tile_shape: Sequence[int]) -> Tensor:
     """
     Builds the output of a linear layer using a GenomicBottleNet (g-net).
 
@@ -84,7 +90,7 @@ def build_linear_xox_output(name: str, param: Tensor, weights: Tensor,
         param (Tensor): Parameter, i.e. weight matrix that we wish to compress/
             predict using a g-net.
         weights (Tensor): Weights used in the computation.
-        tile_shape: Shape of each tile.
+        tile_shape(Sequence[int]): Shape of each tile.
 
     Returns:
         Tensor: Output of the linear layer computed using the g-net.

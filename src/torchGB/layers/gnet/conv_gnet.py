@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 
 from .model import GenomicBottleNet, GNetLayerTuple
-from ...utils import EncodingType, make_row_col_encoding, ceil, cut_matrix, build_4d_kernel
+from ...utils import EncodingType, make_row_col_encoding, ceil, crop_matrix, build_4d_kernel
 
 
 def conv2d_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GNetLayerTuple:
@@ -100,7 +100,7 @@ def build_conv2d_gnet_output(name: str, param: Tensor, weights: Tensor,
     shape = (num_row_tiles*tile_shape[0], num_col_tiles*tile_shape[1],
              param.shape[2], param.shape[3])
 
-    # Build the 4D kernel and cut it to match the input shape
+    # Build the 4D kernel and crop it to match the input shape
     new_weights = build_4d_kernel(weights, shape)
-    new_weights = cut_matrix(new_weights, param.shape)
+    new_weights = crop_matrix(new_weights, param.shape)
     return new_weights

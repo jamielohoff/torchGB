@@ -7,7 +7,7 @@ from torch import Tensor
 
 from .linear_gnet import linear_gnet_layer
 from .model import GenomicBottleNet, GNetLayerTuple
-from ...utils import EncodingType, make_row_col_encoding, ceil, cut_matrix, build_matrix
+from ...utils import EncodingType, make_row_col_encoding, ceil, crop_matrix, build_matrix
 
 
 def attn_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GNetLayerTuple:
@@ -108,5 +108,5 @@ def build_attn_gnet_output(name: str, param: Tensor, weights: Tensor,
     shape = (num_row_tiles * tile_shape[0], num_col_tiles * tile_shape[1])
 
     new_weights = build_matrix(weights, shape)
-    new_weights = cut_matrix(new_weights, param.shape)
+    new_weights = crop_matrix(new_weights, param.shape)
     return new_weights 

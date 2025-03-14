@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 
 from .model import XOXLayer
-from ...utils import ceil, cut_matrix, build_4d_kernel
+from ...utils import ceil, crop_matrix, build_4d_kernel
 
 # TODO: write docstrings
 # TODO: fix scalings and input sizes
@@ -92,8 +92,8 @@ def build_conv2d_xox_output(name: str, param: Tensor, weights: Tensor,
              num_col_tiles*tile_shape[1],
              param.shape[2], param.shape[3])
 
-    # Build the 4D kernel and cut it to match the input shape
+    # Build the 4D kernel and crop it to match the input shape
     new_weights = build_4d_kernel(weights, shape)
-    new_weights = cut_matrix(new_weights, param.shape)
+    new_weights = crop_matrix(new_weights, param.shape)
     return new_weights
 

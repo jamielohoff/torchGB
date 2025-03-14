@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 
 from .model import LowRankMatrixDecompositionGNet
-from ...utils import ceil, cut_matrix, build_matrix
+from ...utils import ceil, crop_matrix, build_matrix
 
 # TODO: Fix documentation
 
@@ -95,6 +95,6 @@ def build_linear_low_rank_output(name: str, param: Tensor, weights: Tensor,
     shape = (num_row_tiles*tile_shape[0], num_col_tiles*tile_shape[1])
 
     new_weights = build_matrix(weights, shape)
-    new_weights = cut_matrix(new_weights, param.shape)
+    new_weights = crop_matrix(new_weights, param.shape)
     return new_weights
 

@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 
 from .model import GenomicBottleNet, GNetLayerTuple
-from ...utils import EncodingType, make_row_col_encoding, ceil, cut_matrix, build_matrix
+from ...utils import EncodingType, make_row_col_encoding, ceil, crop_matrix, build_matrix
 
 
 def linear_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GNetLayerTuple:
@@ -32,10 +32,10 @@ def linear_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GN
     """
     tile_size = ceil(np.sqrt(gnet_batchsize))
     tile_shape = (tile_size, tile_size)
-    num_row_tiles = ceil(param.shape[0]/tile_size)
-    num_col_tiles = ceil(param.shape[1]/tile_size)
+    num_row_tiles = ceil(param.shape[0] / tile_size)
+    num_col_tiles = ceil(param.shape[1] / tile_size)
     
-    num_encoding_bits = ceil(np.log([tile_size, tile_size])/np.log(2))
+    num_encoding_bits = ceil(np.log([tile_size, tile_size]) / np.log(2))
     num_encoding_bits[np.where(num_encoding_bits == 0)] = 1
     encoding_type = (EncodingType.BINARY, EncodingType.BINARY)
     
@@ -101,6 +101,6 @@ def build_linear_gnet_output(name: str, param: Tensor, weights: Tensor,
     shape = (num_row_tiles*tile_shape[0], num_col_tiles*tile_shape[1])
 
     new_weights = build_matrix(weights, shape)
-    new_weights = cut_matrix(new_weights, param.shape)
+    new_weights = crop_matrix(new_weights, param.shape)
     return new_weights
 

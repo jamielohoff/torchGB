@@ -97,7 +97,7 @@ def build_4d_kernel(arr: Tensor, new_shape: Tuple[int, int, int, int]) -> Tensor
     return out
 
 
-def cut_matrix(arr: Tensor, new_shape: Sequence[int]) -> Tensor:
+def crop_matrix(arr: Tensor, new_shape: Sequence[int]) -> Tensor:
     """
     This function cuts the padded matrix to its true shape.
     

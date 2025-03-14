@@ -7,7 +7,7 @@ from torch import Tensor
 
 from .linear_low_rank import linear_low_rank_layer
 from .model import LowRankMatrixDecompositionGNet
-from ...utils import ceil, cut_matrix, build_matrix
+from ...utils import ceil, crop_matrix, build_matrix
 
 
 def attn_low_rank_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int):
@@ -103,6 +103,6 @@ def build_attn_low_rank_output(name: str, param: Tensor, weights: Tensor,
     shape = (num_row_tiles * tile_shape[0], num_col_tiles * tile_shape[1])
 
     new_weights = build_matrix(weights, shape)
-    new_weights = cut_matrix(new_weights, param.shape)
+    new_weights = crop_matrix(new_weights, param.shape)
     return new_weights
 
