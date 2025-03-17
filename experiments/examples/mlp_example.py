@@ -16,7 +16,7 @@ from torchGB.core_fast import FastGenomicBottleneck
 
 ### How to launch this script ##################################################
 # To launch this script, you should use the following command:
-# CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 mlp_example.py --gpus 0,1,2,3 --seed 8888 --batchsize 256 --compression 20
+# CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 mlp_example.py --gpus 0,1,2,3 --seed 8888 --batchsize 256 --compression 5
 # This launches the script on 4 GPUs. It is highly recommended to use multiple
 # GPUs, as it is much faster to train the g-nets on multiple GPUs.
 # This example should work with a single GPU none-the-less.
