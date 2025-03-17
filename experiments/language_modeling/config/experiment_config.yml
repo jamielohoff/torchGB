@@ -15,10 +15,10 @@ model:
   tie_weights: true
 
 gnets:
-  lr: 0.0001
+  lr: 0.00025
   hidden_dim: 32
   gnet_batchsize: 10_000 # 1_000 works better
-  hypernet_type: "stochastic g-net"
+  hypernet_type: "g-net"
   ignore_layers: ["encoder.weight", "decoder.weight", "norm", "bias"]
   max_tiles_batchsize: 8
   compression: 20

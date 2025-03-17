@@ -179,8 +179,8 @@ class FastStochasticGenomicBottleNet(FastGenomicBottleNet):
         layer_list.append(Reshape(num_tiles, sizes[1]))
         layer_list.append(nn.Conv1d(num_tiles, 2*num_tiles, kernel_size=sizes[1], groups=num_tiles))
         self.model = nn.Sequential(*layer_list)
-        # biases = torch.tensor([0.01, np.log(0.02, dtype=np.float32)])
-        # self.model[-1].bias.data = torch.repeat_interleave(biases, num_tiles)
+        biases = torch.tensor([0.0, np.log(0.02, dtype=np.float32)])
+        self.model[-1].bias.data = torch.repeat_interleave(biases, num_tiles)
         
     def init_weights(self) -> None:
         for layer in self.model:
