@@ -1,4 +1,5 @@
 import time
+from functools import partial
 from typing import Callable, Dict, Optional, Sequence, Tuple
 from dataclasses import dataclass
 
@@ -14,6 +15,8 @@ from torch import Tensor
 from .layers.gnet import *
 from .layers.matrix_decomposition import *
 from .layers.xox import *
+
+from .utils import get_gnet_batchsize
 
 
 # Stores how the compression is intended to work for different layer types
@@ -61,17 +64,21 @@ def register_gnet_type(module: nn.Module, init: Callable[[nn.Module], None],
 # TODO: can we make this prettier?
 def register(hypernet_type: str) -> None:
     if hypernet_type == "g-net" or hypernet_type == "gnet":
-        register_gnet_type(nn.TransformerEncoder, init_attn_gnet, build_attn_gnet_output)
-        register_gnet_type(nn.Conv2d, init_conv2d_gnet, build_conv2d_gnet_output)
-        register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output)
-    elif hypernet_type == "low_rank":
-        register_gnet_type(nn.TransformerEncoder, init_attn_low_rank, build_attn_low_rank_output)
-        register_gnet_type(nn.Conv2d, init_conv2d_low_rank, build_conv2d_low_rank_output)
-        register_gnet_type(nn.Linear, init_linear_low_rank, build_linear_low_rank_output)
-    elif hypernet_type == "xox":
-        register_gnet_type(nn.TransformerEncoder, init_attn_xox, build_attn_xox_output)
-        register_gnet_type(nn.Conv2d, init_conv2d_xox, build_conv2d_xox_output)
-        register_gnet_type(nn.Linear, init_linear_xox, build_linear_xox_output)
+        init_attn_gnet = partial(init_attn_gnet_fast, FastGenomicBottleNet)
+        register_gnet_type(nn.TransformerEncoder, init_attn_gnet, build_attn_gnet_output_fast)
+        init_conv2d_gnet = partial(init_conv2d_gnet_fast, FastGenomicBottleNet)
+        register_gnet_type(nn.Conv2d, init_conv2d_gnet, build_conv2d_gnet_output_fast)
+        init_linear_gnet = partial(init_linear_gnet_fast, FastGenomicBottleNet)
+        register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output_fast)
+        
+    elif hypernet_type == "stochastic g-net" or hypernet_type == "stochastic-gnet":
+        init_attn_gnet = partial(init_attn_gnet_fast, FastStochasticGenomicBottleNet)
+        register_gnet_type(nn.TransformerEncoder, init_attn_gnet, build_attn_gnet_output_fast)
+        init_conv2d_gnet = partial(init_conv2d_gnet_fast, FastStochasticGenomicBottleNet)
+        register_gnet_type(nn.Conv2d, init_conv2d_gnet, build_conv2d_gnet_output_fast)
+        init_linear_gnet = partial(init_linear_gnet_fast, FastStochasticGenomicBottleNet)
+        register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output_fast)
+        
     else:
         raise ValueError(f"HyperNetwork type {hypernet_type} not recognized.")
     
@@ -108,7 +115,7 @@ class GNetLayer:
     grad_scale: Optional[float] = None
 
 
-class GenomicBottleneck(nn.Module):
+class FastGenomicBottleneck(nn.Module):
     """
     The GenomicBottleneck class implements a hypernetwork that predicts all
     learnable weights matrices in a given neural network model. For every weight,
@@ -142,15 +149,22 @@ class GenomicBottleneck(nn.Module):
     num_batches: int
     model: nn.Module
     gnetdict: Dict[str, GNetLayer]
+    max_tiles_batchsize: int
     
-    def __init__(self, model: nn.Module,
-                 hidden_dim: int = 32, lr: float = 0.001, 
-                 gnet_batchsize: int = 10_000, 
-                 ignore_layers: Sequence[str] = [],
-                 hypernet_type: str = "g-net") -> None:
-        super(GenomicBottleneck, self).__init__()             
+    def __init__(self, model: nn.Module, hidden_dim: int = 32, 
+                 lr: float = 0.001, gnet_batchsize: int = 10_000, 
+                 compression: Optional[float] = None,
+                 ignore_layers: Sequence[str] = [], hypernet_type: str = "stochastic g-net",
+                 max_tiles_batchsize: int = 8) -> None:
+        super().__init__()
         self.model = model
         self.lr = lr
+        self.max_tiles_batchsize = max_tiles_batchsize
+            
+        if compression:
+            gnet_batchsize = get_gnet_batchsize(compression, hidden_dim, output_dim=2)
+            print(f"Set compression of {compression}x, "
+                  f"thus gnet_batchsize set to {gnet_batchsize}.")
         
         register(hypernet_type)
         
@@ -160,15 +174,13 @@ class GenomicBottleneck(nn.Module):
         load_per_rank = np.zeros(dist.get_world_size()) 
            
         # Iterate over all the modules in the model
-        for name, mod in self.model.module.named_modules(): 
-            for pname, param in mod.named_parameters():    
+        for name, module in self.model.module.named_modules(): 
+            for pname, param in module.named_parameters():    
                 _name = name + "." + pname 
                 ignore_param = any([lname in _name for lname in ignore_layers])
                 if param.requires_grad and not ignore_param \
                     and not "bias" in pname and not _name in initialized:
-                    # NOTE: Edit these lines in order to add a new layers for
-                    # compression or edit the way the current compression behavior
-                    gnet_type = gnet_types.get(type(mod))
+                    gnet_type = gnet_types.get(type(module))
                     if gnet_type:
                         # This implements a rudimentary load balancer across devices
                         # that removes the bias towards the first device
@@ -178,10 +190,9 @@ class GenomicBottleneck(nn.Module):
                         # Here we initialize the g-net for specific layer types
                         if device_id == dist.get_rank():
                             out_fn = gnet_type.init
-                            out = out_fn(pname, param, hidden_dim, gnet_batchsize)
+                            out = out_fn(pname, param, hidden_dim, gnet_batchsize, max_tiles_batchsize)
                             if out_fn:
                                 self._add_gnets(_name, device_id, param, *out)
-                            
                         else:
                             self.gnetdict[_name] = GNetLayer(name=_name, rank=device_id)
                         initialized.add(_name)
@@ -343,12 +354,16 @@ class GenomicBottleneck(nn.Module):
                         for gnet in gnetstack.gnets:
                             # This predicts the new weight tiles using the g-nets:
                             gnet_input = gnetstack.gnet_input
-                            new_weight_tile = gnet(gnet_input)
-                            new_weight_tile = new_weight_tile.reshape(tile_shape)
-                            new_weights.append(new_weight_tile)
+                            tiles_batchsize = gnet.num_tiles
+                            # ouptputs `tiles_batchsize` many tiles that need to be reshaped
+                            gnet_input = gnet_input.unsqueeze(1)
+                            new_weight_tiles = gnet(gnet_input)
+                            _shape = (tiles_batchsize,) + tile_shape
+                            new_weight_tiles = new_weight_tiles.reshape(_shape)
+                            new_weights.append(new_weight_tiles)
                     
                         # Assemble the new weight tiles into the full weight matrix
-                        new_weights = torch.stack(new_weights, dim=0)
+                        new_weights = torch.concatenate(new_weights, dim=0)
                         
                         # Here we build the weight matrix from the tiles 
                         # predicted by the g-nets 
@@ -442,12 +457,11 @@ class GenomicBottleneck(nn.Module):
         """
         gnets = [gnet.to(device_id) for gnet in gnets]
         row_col_encodings = row_col_encodings.to(device_id)
-        
         num_layers = len(gnets[0].sizes) # number of layers in a g-net
         ########################################################################
-        # NOTE: Do not touch! Normalization has been carefully computed...
+        # NOTE: Do not touch! Normalization has been carefully computed...     #
         ########################################################################
-        _lr = self.lr / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5
+        _lr = self.lr / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5 
 
         optimizer = lambda params: optim.Adam(params,  lr=_lr)
         optimizers = [optimizer(gnet.parameters()) for gnet in gnets]
@@ -462,9 +476,12 @@ class GenomicBottleneck(nn.Module):
                                         gnet_input=row_col_encodings,
                                         weights=param.data, grad_scale=1.0)
         
+        total_params = sum(p.numel() for gnet in gnets for p in gnet.parameters())
+        num_tiles = sum(gnet.num_tiles for gnet in gnets)
         print(f"Creating g-net for layer: {name}\n"
               f"Layer size: {param.shape}\n"
               f"Device ID: {device_id}\n"
               f"Number of g-nets: {len(gnets)}\n"
+              f"Total params per gnet: {total_params // num_tiles}\n"
               f"Learning rate: {_lr}\n")
         

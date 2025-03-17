@@ -12,10 +12,11 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 from torchGB import GenomicBottleneck
+from torchGB.core_fast import FastGenomicBottleneck
 
 ### How to launch this script ##################################################
 # To launch this script, you should use the following command:
-# CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 mlp_example.py --gpus 0,1,2,3 --seed 8888 --language en --batchsize 256
+# CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 mlp_example.py --gpus 0,1,2,3 --seed 8888 --batchsize 256 --compression 20
 # This launches the script on 4 GPUs. It is highly recommended to use multiple
 # GPUs, as it is much faster to train the g-nets on multiple GPUs.
 # This example should work with a single GPU none-the-less.
@@ -27,6 +28,10 @@ parser.add_argument("--gpus", type=str, default="0", help="Which GPUs to use.")
 parser.add_argument("--seed", type=int, default=0, help="Random seed of the experiment.")
 
 parser.add_argument("--batchsize", type=int, default=0, help="Batchsize for the experiment.")
+
+parser.add_argument("--gnet_batchsize", type=int, default=10_000, help="Batchsize for the gnets.")
+
+parser.add_argument("--compression", type=int, default=20, help="Batchsize for the gnets.")
 
 args = parser.parse_args()
 
@@ -49,15 +54,14 @@ world_size = dist.get_world_size()
 print(f"Rank: {rank}, World Size: {world_size}")
 
 # Define the model and wrap it into a distributed model
-model = nn.Sequential(
-    nn.Linear(784, 256),
-    nn.ReLU(),
-    nn.Linear(256, 256),
-    nn.ReLU(),
-    nn.Linear(256, 64),
-    nn.ReLU(),
-    nn.Linear(64, 10)
-).to(rank)
+model = nn.Sequential(nn.Linear(784, 256),
+                      nn.ReLU(),
+                      nn.Linear(256, 256),
+                      nn.ReLU(),
+                      nn.Linear(256, 64),
+                      nn.ReLU(),
+                      nn.Linear(64, 10))
+model = model.to(rank)
 # Wrap the model into a distributed model
 model = DDP(model).to(rank)
 
@@ -65,7 +69,10 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
 # Create g-nets/hypernetworks for all linear layers
-gnets = GenomicBottleneck(model)
+gnets = FastGenomicBottleneck(model, compression=args.compression, 
+                              max_tiles_batchsize=8, 
+                              gnet_batchsize=args.gnet_batchsize)
+# gnets = GenomicBottleneck(model, gnet_batchsize=args.gnet_batchsize, hypernet_type="stochastic g-net")
 
 
 # Training function

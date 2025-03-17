@@ -5,12 +5,16 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from .model import GenomicBottleNet, GNetLayerTuple
+from .model import FastGenomicBottleNet, GNetLayerTuple
 from ...utils import EncodingType, make_row_col_encoding, ceil, crop_matrix, build_4d_kernel
 
 
-def conv2d_gnet_layer(model: GenomicBottleNet, param: Tensor, hidden_dim: int, 
-                      gnet_batchsize: int) -> GNetLayerTuple:
+round_up_div = lambda x, y: np.ceil(x / y).astype(int)
+
+
+def conv2d_gnet_layer_fast(model: FastGenomicBottleNet, param: Tensor, 
+                           hidden_dim: int, gnet_batchsize: int, 
+                           max_tiles_batchsize: int) -> GNetLayerTuple:
     """
     Creates a GenomicBottleNet (g-net) layer for 2D convolution.
 
@@ -29,6 +33,7 @@ def conv2d_gnet_layer(model: GenomicBottleNet, param: Tensor, hidden_dim: int,
     tile_size = ceil(np.sqrt(gnet_batchsize//kernel_size))
     num_row_tiles = ceil(param.shape[0]/tile_size)
     num_col_tiles = ceil(param.shape[1]/tile_size)
+    num_tiles = num_row_tiles * num_col_tiles
 
     # Define the tile shape and encoding type
     tile_shape = (tile_size, tile_size, param.shape[2], param.shape[3])
@@ -50,16 +55,22 @@ def conv2d_gnet_layer(model: GenomicBottleNet, param: Tensor, hidden_dim: int,
     # Normalize the output to follow the initial parameter distribution at initialization of the model
     with torch.no_grad():
         output_scale = torch.std(param.data)
-
-    output_size = 1 if isinstance(model, GenomicBottleNet) else 2
+    
+    output_size = 1 if isinstance(model, FastGenomicBottleNet) else 2
     gnet_sizes = (num_inputs, hidden_dim, output_size)
-    gnets = [model(gnet_sizes, output_scale)
-            for _ in range(num_row_tiles*num_col_tiles)]
+    
+    tiles_batchsizes = [max_tiles_batchsize] * (num_tiles // max_tiles_batchsize)
+    remainder = num_tiles % max_tiles_batchsize
+    if remainder > 0:
+        tiles_batchsizes.append(remainder)
+    
+    gnets = [model(tbs, gnet_sizes, output_scale) for tbs in tiles_batchsizes] 
     return row_col_encoding, gnets, tile_shape, output_scale
 
 
-def init_conv2d_gnet(model: GenomicBottleNet, pname: str, param: Tensor, 
-                     hidden_dim: int, gnet_batchsize: int) -> GNetLayerTuple:
+def init_conv2d_gnet_fast(model: FastGenomicBottleNet, pname: str, param: Tensor, 
+                          hidden_dim: int, gnet_batchsize: int, 
+                          max_tiles_batchsize: int) -> GNetLayerTuple:
     """
     Initializes a GenomicBottleNet (g-net) for a 2D convolutional operation.
 
@@ -75,14 +86,13 @@ def init_conv2d_gnet(model: GenomicBottleNet, pname: str, param: Tensor,
             of conv2d_gnet_layer. Otherwise, it returns None.
     """
     if "weight" in pname:
-        return conv2d_gnet_layer(model, param, hidden_dim, gnet_batchsize)
-
+        return conv2d_gnet_layer_fast(model, param, hidden_dim, gnet_batchsize, max_tiles_batchsize)
     else:
         return None
 
 
-def build_conv2d_gnet_output(name: str, param: Tensor, weights: Tensor,
-                             tile_shape: Sequence[int]) -> Tensor:
+def build_conv2d_gnet_output_fast(name: str, param: Tensor, weights: Tensor,
+                                  tile_shape: Sequence[int]) -> Tensor:
     """
     Builds the output of a 2D convolutional operation using a GenomicBottleNet (g-net).
 

@@ -1,4 +1,5 @@
 from .core import GenomicBottleneck
+from .core_fast import FastGenomicBottleneck
 
 import sys
 

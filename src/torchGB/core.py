@@ -1,5 +1,6 @@
 import time
 from typing import Callable, Dict, Optional, Sequence, Tuple
+from functools import partial
 from dataclasses import dataclass
 
 import numpy as np
@@ -61,13 +62,31 @@ def register_gnet_type(module: nn.Module, init: Callable[[nn.Module], None],
 # TODO: can we make this prettier?
 def register(hypernet_type: str) -> None:
     if hypernet_type == "g-net" or hypernet_type == "gnet":
-        register_gnet_type(nn.TransformerEncoder, init_attn_gnet, build_attn_gnet_output)
-        register_gnet_type(nn.Conv2d, init_conv2d_gnet, build_conv2d_gnet_output)
-        register_gnet_type(nn.Linear, init_linear_gnet, build_linear_gnet_output)
+        init_attn = partial(init_attn_gnet, GenomicBottleNet)
+        register_gnet_type(nn.TransformerEncoder, init_attn, build_attn_gnet_output)
+        init_conv2d = partial(init_conv2d_gnet, GenomicBottleNet)
+        register_gnet_type(nn.Conv2d, init_conv2d, build_conv2d_gnet_output)
+        init_linear = partial(init_linear_gnet_fast, GenomicBottleNet)
+        register_gnet_type(nn.Linear, init_linear, build_linear_gnet_output)
+        
+    elif hypernet_type == "stochastic g-net" or hypernet_type == "stochastic gnet":
+        init_attn_sgn = partial(init_attn_gnet, StochasticGenomicBottleNet)
+        build_attn_sgn_output = build_attn_gnet_output
+        register_gnet_type(nn.TransformerEncoder, init_attn_sgn, build_attn_sgn_output)
+        
+        init_conv2d_sgn = partial(init_conv2d_gnet, StochasticGenomicBottleNet)
+        build_conv2d_sgn_output = build_conv2d_gnet_output
+        register_gnet_type(nn.Conv2d, init_conv2d_sgn, build_conv2d_sgn_output)
+        
+        init_linear_sgn = partial(init_linear_gnet, StochasticGenomicBottleNet)
+        build_linear_sgn_output = build_linear_gnet_output
+        register_gnet_type(nn.Linear, init_linear_sgn, build_linear_sgn_output)
+        
     elif hypernet_type == "low_rank":
         register_gnet_type(nn.TransformerEncoder, init_attn_low_rank, build_attn_low_rank_output)
         register_gnet_type(nn.Conv2d, init_conv2d_low_rank, build_conv2d_low_rank_output)
         register_gnet_type(nn.Linear, init_linear_low_rank, build_linear_low_rank_output)
+        
     elif hypernet_type == "xox":
         register_gnet_type(nn.TransformerEncoder, init_attn_xox, build_attn_xox_output)
         register_gnet_type(nn.Conv2d, init_conv2d_xox, build_conv2d_xox_output)
@@ -143,9 +162,8 @@ class GenomicBottleneck(nn.Module):
     model: nn.Module
     gnetdict: Dict[str, GNetLayer]
     
-    def __init__(self, model: nn.Module,
-                 hidden_dim: int = 32, lr: float = 0.001, 
-                 gnet_batchsize: int = 10_000, 
+    def __init__(self, model: nn.Module, hidden_dim: int = 32, 
+                 lr: float = 0.001, gnet_batchsize: int = 10_000, 
                  ignore_layers: Sequence[str] = [],
                  hypernet_type: str = "g-net") -> None:
         super(GenomicBottleneck, self).__init__()             
@@ -340,14 +358,17 @@ class GenomicBottleneck(nn.Module):
                     if gnetstack.rank == dist.get_rank():
                         new_weights = []
                         tile_shape = gnetstack.tile_shape
+                        # print("name:", _name)
+                        # if _name == "transformer_encoder.layers.0.self_attn.in_proj_weight":
+                        #     print("model weights:", gnetstack.gnets[0].model[0].weight)
                         for gnet in gnetstack.gnets:
-                            # This predicts the new weight tiles using the g-nets:
+                            # This predicts the new weight tiles using g-nets:
                             gnet_input = gnetstack.gnet_input
                             new_weight_tile = gnet(gnet_input)
                             new_weight_tile = new_weight_tile.reshape(tile_shape)
                             new_weights.append(new_weight_tile)
                     
-                        # Assemble the new weight tiles into the full weight matrix
+                        # Assemble the new weight tiles into the  weight matrix
                         new_weights = torch.stack(new_weights, dim=0)
                         
                         # Here we build the weight matrix from the tiles 
@@ -462,9 +483,12 @@ class GenomicBottleneck(nn.Module):
                                         gnet_input=row_col_encodings,
                                         weights=param.data, grad_scale=1.0)
         
+        total_params = sum(p.numel() for p in gnets[0].parameters())
+        
         print(f"Creating g-net for layer: {name}\n"
               f"Layer size: {param.shape}\n"
               f"Device ID: {device_id}\n"
               f"Number of g-nets: {len(gnets)}\n"
+              f"Total params per gnet: {total_params}\n"
               f"Learning rate: {_lr}\n")
         

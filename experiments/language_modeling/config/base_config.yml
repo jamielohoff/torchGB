@@ -1,0 +1,24 @@
+data_dirs:
+  prefix: "/Data/pgi-15/lohoff/hf_cache/_tokenized"
+  en: "/en"
+  de: "/de"
+  it: "/it"
+  ru: "/ru"
+  ar: "/ar"
+  zh: "/zh"
+  eo: "/eo"
+
+dirs:
+  project_root: "/Users/grieser/Projects/torchGB"
+  cache: "/Data/pgi-15/lohoff/hf_cache/cache"
+  tokenizer: "/Users/grieser/Projects/torchGB/experiments/language_modeling/tokenizers"
+  wandb: "/Data/pgi-15/lohoff/wandb"
+  log: "/Data/pgi-15/lohoff/logs"
+  save_model: "/Users/grieser/Projects/torchGB/experiments/language_modeling/model_weights"
+  save_gnets: "/Users/grieser/Projects/torchGB/experiments/language_modeling/gnets_weights"
+
+accounts:
+  wandb_address: "https://wandb.fz-juelich.de"
+  wandb_user: "ja-lohoff"
+  wandb_key: "local-84c6642fa82dc63629ceacdcf326632140a7a899"
+  hf: ""

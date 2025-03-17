@@ -19,7 +19,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-from torchGB import GenomicBottleneck
+from torchGB import GenomicBottleneck, FastGenomicBottleneck
 from _transformer import GPT, generate_square_subsequent_mask, predict_sequence
 from utils import get_dataloader, load_model_layers, load_config, commit_to_experiments_branch
 
@@ -183,7 +183,8 @@ train_loader = get_dataloader(tokenized_train_dataset, rank, world_size,
 # Initialize the model and optimizers
 model = GPT(**experiment_config["model"]).to(rank)
 model = DDP(model, device_ids=[rank], output_device=rank)
-gnets = GenomicBottleneck(model, **experiment_config["gnets"])
+gnets = FastGenomicBottleneck(model, **experiment_config["gnets"])
+# gnets = GenomicBottleneck(model, **experiment_config["gnets"])
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])

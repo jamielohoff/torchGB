@@ -1,0 +1,24 @@
+lr: 0.00025
+epochs: 100
+log_interval: 10
+val_interval: 5000
+val_dataset_len: 4096 # 16000 # 524288
+
+model:
+  seq_len: 512
+  vocab_size: 30_000 # 50_257
+  embedding_dim: 512
+  num_heads: 8
+  ff_dim: 2048
+  num_layers: 4
+  dropout: 0.1
+  tie_weights: true
+
+gnets:
+  lr: 0.0001
+  hidden_dim: 32
+  gnet_batchsize: 10_000 # 1_000 works better
+  hypernet_type: "stochastic g-net"
+  ignore_layers: ["encoder.weight", "decoder.weight", "norm", "bias"]
+  max_tiles_batchsize: 8
+  compression: 20

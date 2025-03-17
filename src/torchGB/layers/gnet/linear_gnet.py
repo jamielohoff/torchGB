@@ -9,7 +9,8 @@ from .model import GenomicBottleNet, GNetLayerTuple
 from ...utils import EncodingType, make_row_col_encoding, ceil, crop_matrix, build_matrix
 
 
-def linear_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GNetLayerTuple:
+def linear_gnet_layer(model: GenomicBottleNet,param: Tensor, hidden_dim: int, 
+                      gnet_batchsize: int) -> GNetLayerTuple:
     """
     Calculates the number of square tiles of size `gnet_batchsize` we need to
     completely cover the weight matrix. This function is usually used to initialize
@@ -49,15 +50,16 @@ def linear_gnet_layer(param: Tensor, hidden_dim: int, gnet_batchsize: int) -> GN
     with torch.no_grad():
         output_scale = torch.std(param.data)   
 
-    gnet_sizes = (num_inputs, hidden_dim, 2)
-    gnets = [GenomicBottleNet(gnet_sizes, output_scale) 
+    output_size = 1 if isinstance(model, GenomicBottleNet) else 2
+    gnet_sizes = (num_inputs, hidden_dim, output_size)
+    gnets = [model(gnet_sizes, output_scale) 
              for _ in range(num_row_tiles*num_col_tiles)]     
     
     return row_col_encoding, gnets, tile_shape, output_scale
 
 
-def init_linear_gnet(pname: str, param: Tensor, hidden_dim: int,
-                     gnet_batchsize: int) -> GNetLayerTuple:
+def init_linear_gnet(model: GenomicBottleNet,pname: str, param: Tensor, 
+                     hidden_dim: int, gnet_batchsize: int) -> GNetLayerTuple:
     """
     Initializes a GenomicBottleNet (g-net) for a linear layer.
 
@@ -75,7 +77,7 @@ def init_linear_gnet(pname: str, param: Tensor, hidden_dim: int,
             the g-net, the shape of a single tile and the scale of the outputs.
     """
     if "weight" in pname:
-        return linear_gnet_layer(param, hidden_dim, gnet_batchsize)
+        return linear_gnet_layer(model, param, hidden_dim, gnet_batchsize)
     else:
         return None
 

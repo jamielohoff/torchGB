@@ -5,6 +5,7 @@ import copy
 import torch
 from torch import Tensor
 import numpy as np
+import scipy.optimize as opt
 
 
 class EncodingType(Enum):
@@ -24,6 +25,28 @@ class EncodingType(Enum):
     
 
 ceil = lambda x: np.ceil(x).astype(np.int32)
+
+
+
+def get_gnet_batchsize(compression: float, hidden_dim: int, output_dim: int = 1) -> int:
+    """Calculates the g-net batch size based on desired compression, hidden 
+    dimension, and output dimension.
+    This function determines the appropriate batch size for g-nets to achieve a 
+    desired compression ratio. It uses the `scipy.optimize.root_scalar` function 
+    to find the root of a non-linear equation that relates the batch size to the 
+    compression ratio, hidden dimension, and output dimension.
+
+    Args:
+        compression (float): The desired compression ratio.
+        hidden_dim (int): The hidden dimension of the g-net.
+        output_dim (int, optional): The output dimension of the g-net. Defaults to 1.
+
+    Returns:
+        int: The calculated g-net batch size.
+    """
+    f = lambda g: g/(hidden_dim * (np.ceil(np.log(g)) + 2) + output_dim) - compression
+    rootfinder = opt.root_scalar(f, x0=10_000, method="secant")
+    return int(rootfinder.root)
 
 
 def tile_matrix(matrix: Tensor, row_size: int, col_size: int) -> Tensor:
