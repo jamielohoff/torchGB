@@ -313,38 +313,38 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             start_time = time.time()
 
         # Validation
-        if global_step % VAL_INTERVAL == 0:
-            val_loss = evaluate(model, val_loader)
-            dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
-            val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
+        # if global_step % VAL_INTERVAL == 0:
+        #     val_loss = evaluate(model, val_loader)
+        #     dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
+        #     val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
                
-            test_seq = predict_sequence("I seek glory", tokenizer, model, rank)
+        #     test_seq = predict_sequence("I seek glory", tokenizer, model, rank)
             
-            if rank == 0:
-                logger.info("Output sequence: " + test_seq)
-                logger.info(f"validation loss {float(val_loss):5.2f} | "
-                            f"validation ppl {val_ppl:8.2f}")
-                run.log({"validation_loss": val_loss, "val ppl": val_ppl})
+        #     if rank == 0:
+        #         logger.info("Output sequence: " + test_seq)
+        #         logger.info(f"validation loss {float(val_loss):5.2f} | "
+        #                     f"validation ppl {val_ppl:8.2f}")
+        #         run.log({"validation_loss": val_loss, "val ppl": val_ppl})
                 
-            global best_val_loss
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+        #     global best_val_loss
+        #     if val_loss < best_val_loss:
+        #         best_val_loss = val_loss
    
-                if args.checkpoint:
-                    logger.debug(f"Saving g-net weights under {GNET_CHCKPT_PATH}.")
-                    gnets.save(GNET_CHCKPT_PATH) 
+        #         if args.checkpoint:
+        #             logger.debug(f"Saving g-net weights under {GNET_CHCKPT_PATH}.")
+        #             gnets.save(GNET_CHCKPT_PATH) 
                 
-                    if rank == 0:
-                        logger.debug(f"Saving model weights, optimizer,"
-                                     f"seed and dataset state under {MODEL_CHCKPT_PATH}.")
-                        param_dict = {"seed": SEED,
-                                      "model": model.state_dict(),
-                                      "optimizer": optimizer.state_dict(),
-                                      "dataloader": train_loader.state_dict()}
-                        torch.save(param_dict, MODEL_CHCKPT_PATH)
-                    else:
-                        # Put other processes to sleep while logging...good night!
-                        time.sleep(1)
+        #             if rank == 0:
+        #                 logger.debug(f"Saving model weights, optimizer,"
+        #                              f"seed and dataset state under {MODEL_CHCKPT_PATH}.")
+        #                 param_dict = {"seed": SEED,
+        #                               "model": model.state_dict(),
+        #                               "optimizer": optimizer.state_dict(),
+        #                               "dataloader": train_loader.state_dict()}
+        #                 torch.save(param_dict, MODEL_CHCKPT_PATH)
+        #             else:
+        #                 # Put other processes to sleep while logging...good night!
+        #                 time.sleep(1)
 
 
 # Evaluation function
@@ -421,10 +421,10 @@ for epoch in range(EPOCHS):
     SEED += 1
     
     tokenized_train_dataset = tokenized_train_dataset.shuffle(seed=SEED)
-    tokenized_val_dataset = tokenized_val_dataset.shuffle(seed=SEED)
+    # tokenized_val_dataset = tokenized_val_dataset.shuffle(seed=SEED)
     
     train_loader = loader(stateful=True)
-    val_loader = loader()
+    # val_loader = loader()
 
 
 # Evaluate the best model on the test dataset
