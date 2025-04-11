@@ -151,15 +151,20 @@ class FastGenomicBottleneck(nn.Module):
     gnetdict: Dict[str, GNetLayer]
     max_tiles_batchsize: int
     
-    def __init__(self, model: nn.Module, hidden_dim: int = 32, 
+    def __init__(self, model: nn.Module, local_rank_dict: Dict[int, int], 
+                 hidden_dim: int = 32, 
                  lr: float = 0.001, gnet_batchsize: int = 10_000, 
                  compression: Optional[float] = None,
-                 ignore_layers: Sequence[str] = [], hypernet_type: str = "stochastic g-net",
-                 max_tiles_batchsize: int = 8) -> None:
+                 ignore_layers: Sequence[str] = [], 
+                 hypernet_type: str = "g-net",
+                 max_tiles_batchsize: int = 8,
+                 scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None) -> None:
         super().__init__()
         self.model = model
         self.lr = lr
         self.max_tiles_batchsize = max_tiles_batchsize
+        self.scheduler = scheduler
+        self.local_rank_dict = local_rank_dict
             
         if compression:
             gnet_batchsize = get_gnet_batchsize(compression, hidden_dim, output_dim=2)
@@ -184,17 +189,17 @@ class FastGenomicBottleneck(nn.Module):
                     if gnet_type:
                         # This implements a rudimentary load balancer across devices
                         # that removes the bias towards the first device
-                        device_id = np.where(load_per_rank == load_per_rank.min())[0][-1]
-                        load_per_rank[device_id] += param.data.numel()
+                        global_rank = np.where(load_per_rank == load_per_rank.min())[0][-1]
+                        load_per_rank[global_rank] += param.data.numel()
                     
                         # Here we initialize the g-net for specific layer types
-                        if device_id == dist.get_rank():
+                        if global_rank == dist.get_rank():
                             out_fn = gnet_type.init
                             out = out_fn(pname, param, hidden_dim, gnet_batchsize, max_tiles_batchsize)
                             if out_fn:
-                                self._add_gnets(_name, device_id, param, *out)
+                                self._add_gnets(_name, global_rank, param, *out)
                         else:
-                            self.gnetdict[_name] = GNetLayer(name=_name, rank=device_id)
+                            self.gnetdict[_name] = GNetLayer(name=_name, rank=global_rank)
                         initialized.add(_name)
                     
     def __repr__(self) -> str:
@@ -214,14 +219,15 @@ class FastGenomicBottleneck(nn.Module):
         Returns:
             int: Cumulative number of parameters of all g-nets.
         """
-        num_params = torch.tensor(0).to(dist.get_rank()) 
+        rank = dist.get_rank() % torch.cuda.device_count()
+        num_params = torch.tensor(0).to(rank) 
         
         for name in self.gnetdict.keys():
             n = 0
             if self.gnetdict[name].gnets is not None:
                 for gnet in self.gnetdict[name].gnets:
                     n += sum(param.numel() for _, param in gnet.named_parameters())
-            num_params += torch.tensor(n).to(dist.get_rank())
+            num_params += torch.tensor(n).to(rank)
         
         dist.all_reduce(num_params, op=dist.ReduceOp.SUM)
         return num_params.item()
@@ -308,6 +314,7 @@ class FastGenomicBottleneck(nn.Module):
                                                              checkpoint[optimizer_name]):
                     gnet.load_state_dict(gnet_params)
                     opt.load_state_dict(opt_state)
+                    # TODO: Also load scheduler state
 
     def train(self) -> None:
         """
@@ -431,12 +438,12 @@ class FastGenomicBottleneck(nn.Module):
         for name in self.gnetdict.keys():
             gnetstack = self.gnetdict[name]
             if gnetstack.rank == dist.get_rank():
-                # iter = zip(gnetstack.optimizers, gnetstack.schedulers)
-                for optimizer in gnetstack.optimizers:
+                iter = zip(gnetstack.optimizers, gnetstack.schedulers)
+                for optimizer, scheduler in iter:
                     optimizer.step()
-                    # scheduler.step()
+                    scheduler.step()
                     
-    def _add_gnets(self, name: str, device_id: int, param: Tensor,
+    def _add_gnets(self, name: str, global_rank: int, param: Tensor,
                    row_col_encodings: Tensor, gnets: HyperNetwork, 
                    tile_shape: Tuple[int, int], output_scale: float,
                    grad_scale: Optional[float] = 1.) -> None:
@@ -445,7 +452,7 @@ class FastGenomicBottleneck(nn.Module):
 
         Args:
             name (str): Name of the layer parameter predicted by the g-net.
-            device_id (int): Rank of the device where the g-net is stored.
+            global_rank (int): Rank of the device where the g-net is stored.
             param (Tensor): The parameter tensor of the layer.
             row_col_encodings (torch.Tensor): The row and column encodings of 
                 the parameter matrix.
@@ -455,32 +462,35 @@ class FastGenomicBottleneck(nn.Module):
             output_scale (float): The scaling factor for the g-net output.
             grad_scale (float): The scaling factor for the gradients.
         """
-        gnets = [gnet.to(device_id) for gnet in gnets]
-        row_col_encodings = row_col_encodings.to(device_id)
+        # TODO global_rank will have to be converted into local rank first!
+        local_rank = self.local_rank_dict[global_rank]
+        gnets = [gnet.to(local_rank) for gnet in gnets]
+        row_col_encodings = row_col_encodings.to(local_rank)
         num_layers = len(gnets[0].sizes) # number of layers in a g-net
         ########################################################################
         # NOTE: Do not touch! Normalization has been carefully computed...     #
         ########################################################################
         _lr = self.lr / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5 
+        ########################################################################
 
-        optimizer = lambda params: optim.Adam(params,  lr=_lr)
+        optimizer = lambda params: optim.Adam(params,  lr=_lr, fused=True)
         optimizers = [optimizer(gnet.parameters()) for gnet in gnets]
         
-        scheduler = lambda opt: optim.lr_scheduler.LinearLR(opt, start_factor=1, end_factor=1)
-        schedulers = None # [scheduler(opt) for opt in optimizers]
+        scheduler = self.scheduler
+        schedulers = [scheduler(optimizers[i], _lr) for i in range(len(optimizers))]
         
-        self.gnetdict[name] = GNetLayer(name=name, rank=device_id,
+        self.gnetdict[name] = GNetLayer(name=name, rank=global_rank,
                                         tile_shape=tile_shape, gnets=gnets,
                                         optimizers=optimizers,
                                         schedulers=schedulers,
                                         gnet_input=row_col_encodings,
-                                        weights=param.data, grad_scale=1.0)
+                                        weights=param.data, grad_scale=grad_scale)
         
         total_params = sum(p.numel() for gnet in gnets for p in gnet.parameters())
         num_tiles = sum(gnet.num_tiles for gnet in gnets)
         print(f"Creating g-net for layer: {name}\n"
               f"Layer size: {param.shape}\n"
-              f"Device ID: {device_id}\n"
+              f"Device ID: {global_rank}\n"
               f"Number of g-nets: {len(gnets)}\n"
               f"Total params per gnet: {total_params // num_tiles}\n"
               f"Learning rate: {_lr}\n")

@@ -1,0 +1,26 @@
+lr: 0.0003
+warmup_iters: 2000
+max_iters: 100_000
+val_iters: 50
+log_interval: 10
+val_interval: 500
+gradient_accumulation_steps: 5
+
+model:
+  seq_len: 1024
+  vocab_size: 50_304
+  embedding_dim: 768
+  num_heads: 12
+  ff_dim: 3072
+  num_layers: 12
+  dropout: 0.1
+  tie_weights: true
+
+gnets:
+  lr: 0.0003
+  hidden_dim: 32
+  gnet_batchsize: 10_000
+  hypernet_type: "g-net"
+  ignore_layers: ["encoder.weight", "decoder.weight", "norm", "bias"]
+  max_tiles_batchsize: 8
+  # compression: 20

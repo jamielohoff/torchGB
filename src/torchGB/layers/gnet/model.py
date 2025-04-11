@@ -146,12 +146,11 @@ class FastGenomicBottleNet(GenomicBottleNet):
     def init_weights(self) -> None:
         for layer in self.model:
             if isinstance(layer, nn.Conv1d):
-                nn.init.normal_(layer.weight, mean=0, std=0.1) # initialization here is key!
+                nn.init.normal_(layer.weight, mean=0, std=1e-1) # initialization here is key!
                 if layer.bias is not None:
                     nn.init.zeros_(layer.bias)
                     
     def forward(self, x: Tensor) -> Tensor:
-        # NOTE: 
         return self.model(x) * torch.tensor(2.) * self.output_scale
     
     

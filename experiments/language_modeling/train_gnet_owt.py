@@ -2,10 +2,8 @@ import os
 import sys
 import time
 import argparse
-from functools import partial
 
 from loguru import logger
-from tqdm import tqdm
 import wandb
 
 import numpy as np 
@@ -15,13 +13,11 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-from datasets import load_dataset
-from transformers import AutoTokenizer
+from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 
 from torchGB import GenomicBottleneck, FastGenomicBottleneck
 from _transformer import GPT, generate_square_subsequent_mask
-from utils import get_dataloader, load_model_layers, load_config, commit_to_experiments_branch
+from utils import load_model_layers, load_config, commit_to_experiments_branch
 
 parser = argparse.ArgumentParser()
 
@@ -31,9 +27,7 @@ parser.add_argument("--seed", type=int, default=0, help="Random seed of the expe
 
 parser.add_argument("--name", type=str, default="Test", help="Name of the experiment.")
 
-parser.add_argument("--language", type=str, default="en", help="Which language to use.")
-
-parser.add_argument("--batchsize", type=int, default=16, help="Training batchsize.")
+parser.add_argument("--batchsize", type=int, default=12, help="Training batchsize.")
 
 parser.add_argument("--load_gnets", type=str, default=None, 
                     help="Path to the gnet weights.")
@@ -61,7 +55,7 @@ parser.add_argument("--load_dataloader_state", action="store_true",
 parser.add_argument("--scheduler", action="store_true",
                     help="Whether to use a warmup schedule or not.")
 
-parser.add_argument("--config", type=str, default="experiment_config.yml",
+parser.add_argument("--config", type=str, default="owt_config.yml",
                     help="Experiment configuration.")
 
 parser.add_argument("--wandb", type=str, default="online",
@@ -77,32 +71,41 @@ logger.add(sys.stderr, level=args.log_level)
 
 # Setup of global variables
 torch.manual_seed(args.seed)
-os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
 
 
 # Multiprocessing setup
 dist.init_process_group(backend="nccl")
 rank = dist.get_rank()
+local_rank = int(os.environ["LOCAL_RANK"])
 world_size = dist.get_world_size()
 logger.debug(f"Rank: {rank}, World Size: {world_size}")
 
 
 # Initialize experiment hyperparameters
 experiment_config = load_config("config/" + args.config)
-EPOCHS = experiment_config["epochs"]
+LR = experiment_config["lr"]
 BATCHSIZE = args.batchsize
 SEQ_LEN = experiment_config["model"]["seq_len"]
 VOCAB_SIZE = experiment_config["model"]["vocab_size"]
 LOG_INTERVAL = experiment_config["log_interval"]
 VAL_INTERVAL = experiment_config["val_interval"]
 SEED = args.seed
-global_step = 0
+MAX_ITERS = experiment_config["max_iters"]
+WARMUP_ITERS = experiment_config["warmup_iters"]
+EVAL_ITERS = experiment_config["val_iters"]
+GRADIENT_ACCUMULATION_STEPS = experiment_config["gradient_accumulation_steps"]
+
+TOTAL_NUM_TOKENS = SEQ_LEN * BATCHSIZE * GRADIENT_ACCUMULATION_STEPS * MAX_ITERS / 1e9
+logger.debug(f"Total number of tokens in training: {TOTAL_NUM_TOKENS:.2f}B")
+
+TOKENS_PER_STEP = BATCHSIZE * GRADIENT_ACCUMULATION_STEPS * world_size * SEQ_LEN
+logger.debug(f"Tokens per step: {TOKENS_PER_STEP}")
 
 
 # Initialize the data directory
 base_config = load_config("config/base_config.yml")
 prefix = base_config["data_dirs"]["prefix"]
-data_dir = prefix + base_config["data_dirs"][args.language]
+data_dir = os.path.join("/Users/grieser/Projects/bla", "data", "openwebtext")
 logger.debug(f"Data directory: {data_dir}")
 cache_dir = base_config["dirs"]["cache"]
 logger.debug(f"Cache directory: {cache_dir}")
@@ -118,10 +121,10 @@ else:
     
 
 # Set the model and gnet checkpoint paths
-experiment_name = "GBT_" + args.name
-fname = experiment_name + "_gnets_" + args.language + ".pth"
+experiment_name = "GBT_OWT_" + args.name
+fname = experiment_name + "_gnets_" + ".pth"
 GNET_CHCKPT_PATH  = os.path.join(base_config["dirs"]["save_gnets"], fname)
-fname = experiment_name + "_model_" + args.language + ".pth"
+fname = experiment_name + "_model_" + ".pth"
 MODEL_CHCKPT_PATH  = os.path.join(base_config["dirs"]["save_model"], fname)
 
 
@@ -134,86 +137,81 @@ if rank == 0 and args.checkpoint:
 
 
 # Load and create datasets
-train_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
-                             cache_dir=cache_dir, split="train[:95%]")
-
-val_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
-                           cache_dir=cache_dir, split="train[95%:96%]")
-
-val_dataset = val_dataset.take(experiment_config["val_dataset_len"]//world_size)
-
-test_dataset = load_dataset("wikimedia/wikipedia", "20231101." + args.language, 
-                            cache_dir=cache_dir, split="train[95%:96%]")
-
-# Initialize the tokenizer
-tokenizer_path = os.path.join(base_config["dirs"]["tokenizer"], "wikipedia_" + args.language)
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-logger.debug(f"Vocab size: {tokenizer.vocab_size}")
+train_data = np.memmap(os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r")
+val_data = np.memmap(os.path.join(data_dir, "val.bin"), dtype=np.uint16, mode="r")
 
 
-def tokenize_function(element):
-    outputs = tokenizer(element["text"], truncation=True, max_length=SEQ_LEN+1,
-                        return_overflowing_tokens=True, return_length=True)
+# TODO: This needs a stateful dataloader because otherwise we may oversample stuff...
+def get_batch(split: str):
+    data = train_data if split == "train" else val_data
+    ix = torch.randint(len(data) - SEQ_LEN, (BATCHSIZE,))
+    x = torch.stack([torch.from_numpy((data[i:i+SEQ_LEN]).astype(np.int64)) for i in ix])
+    y = torch.stack([torch.from_numpy((data[i+1:i+1+SEQ_LEN]).astype(np.int64)) for i in ix])
     
-    input_batch = []
-    for length, input_ids in zip(outputs["length"], outputs["input_ids"]):
-        if length == SEQ_LEN+1: # Drops all sentences that are not long enough...
-            input_batch.append(input_ids)
-    return {"input_ids": input_batch}
+    # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
+    x, y = x.pin_memory().to(local_rank, non_blocking=True), y.pin_memory().to(local_rank, non_blocking=True)
+    return x, y
 
-
-rm_cols = train_dataset.column_names
-tokenized_train_dataset = train_dataset.map(tokenize_function, batched=True, 
-                                            num_proc=16, remove_columns=rm_cols)
-tokenized_train_dataset = tokenized_train_dataset.shuffle(seed=SEED)
-
-tokenized_val_dataset = val_dataset.map(tokenize_function, batched=True, 
-                                        num_proc=16, remove_columns=rm_cols)
-
-tokenized_test_dataset = test_dataset.map(tokenize_function, batched=True, 
-                                          num_proc=16, remove_columns=rm_cols)
-
-
-num_batches = len(tokenized_train_dataset)*EPOCHS//(BATCHSIZE*world_size) + 1
-logger.debug(f"Number of batches in train dataset: {num_batches}")
-
-train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, 
-                              BATCHSIZE, stateful=True)
 
 # Initialize the model and optimizers
-model = GPT(**experiment_config["model"]).to(rank)
-model = DDP(model, device_ids=[rank], output_device=rank)
-gnets = FastGenomicBottleneck(model, **experiment_config["gnets"])
+model = GPT(**experiment_config["model"]).to(local_rank)
+model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 # gnets = GenomicBottleneck(model, **experiment_config["gnets"])
 
+# Communicate local rank to all other ranks
+global_local_rank = torch.tensor([rank, local_rank], dtype=torch.int32).to(local_rank)
+local_rank_tensor = torch.zeros(2*world_size, dtype=torch.int32).to(local_rank)
+
+dist.all_gather_into_tensor(local_rank_tensor, global_local_rank)
+
+dist.barrier()
+
+logger.debug(f"Received local ranks: {local_rank_tensor}")
+
+# Assemble local ranks into a dictionary
+local_rank_dict = {}
+for i in range(world_size):
+    idx = local_rank_tensor[2*i].cpu().item()
+    local_rank_dict[idx] = local_rank_tensor[2*i+1].cpu().item()
+
+logger.debug(f"Local Rank Dictionary: {local_rank_dict}")
+
+# Setting up the loss and optimizers
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=experiment_config["lr"])
+optimizer = optim.AdamW(model.parameters(), lr=LR, fused=True, weight_decay=0.1)
 scheduler = None
 
-if args.scheduler:
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, 
-                                              max_lr=experiment_config["lr"], 
-                                              pct_start=0.2, div_factor=250,
-                                              final_div_factor=1000,
-                                              total_steps=num_batches)
 
+# NOTE: for larger models, the scheduling should be used!
+# TODO apply scheduler to the gnet as well!
+
+def make_scheduler(opt, lr):
+    linear_increase = LinearLR(opt, start_factor=0.1,end_factor=1.,
+                               total_iters=WARMUP_ITERS)
+    cosine_annealing = CosineAnnealingLR(opt, eta_min=lr*0.1,
+                                         T_max=MAX_ITERS-WARMUP_ITERS)
+    scheduler = SequentialLR(opt, [linear_increase, cosine_annealing],
+                             milestones=[WARMUP_ITERS])
+    return scheduler
+
+
+if args.scheduler:
+    scheduler = make_scheduler(optimizer, LR)
+    gnets = FastGenomicBottleneck(model, local_rank_dict, scheduler=make_scheduler, **experiment_config["gnets"])
+else:
+    gnets = FastGenomicBottleneck(model, local_rank_dict, **experiment_config["gnets"])
 
 # Dealing with custom model loading
 # TODO outsource this into an additional lib!
 if args.load_model is not None:
     assert os.path.exists(args.load_model), f"File {args.load_model} does not exist."
-    map_loc = torch.device(rank)
+    map_loc = torch.device(local_rank)
     cpu_loc = torch.device("cpu")
     
     # Load dataset state if applicable
     if args.load_dataloader_state:
         state_dict = torch.load(args.load_model, map_location=cpu_loc)
         SEED = state_dict["seed"]
-        
-        tokenized_train_dataset.shuffle(seed=SEED)
-        train_loader = get_dataloader(tokenized_train_dataset, rank, world_size, 
-                                      BATCHSIZE, stateful=True)
-        train_loader.load_state_dict(state_dict["dataloader"])
         
         logger.info(f"Loaded dataloader state from {args.load_model} "
                     f"with random seed {SEED}")
@@ -252,69 +250,72 @@ compression_factor = gnets.compression()
 
 
 # Other stuff that is required
-best_val_loss = float("inf")
-mask = generate_square_subsequent_mask(SEQ_LEN-1).to(rank)
+best_val_loss = 1e9
+mask = generate_square_subsequent_mask(SEQ_LEN).to(local_rank)
 
 
 # Training function
 def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
+    global mask
     gnets.train()
     total_loss = 0
     start_time = time.time()
     
-    for data in tqdm(train_loader):
+    for iter in range(1, MAX_ITERS+1):
         model.train()
-        global global_step
-        global_step += 1
-        data = torch.stack(data["input_ids"]).t().to(rank)
         
         # Zeroing out the gradients in the p-net and g-net optimizers
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         gnets.zero_grad()
         gnets.predict_weights() # implicitly updates the model weights!
         
-        tokens = data[:, :SEQ_LEN-1]
-        output = model(tokens, mask)
-        
-        # Auto-regressive, unsupervised loss
-        logits = output.view(-1, VOCAB_SIZE)
-        labels = data[:, 1:SEQ_LEN].reshape(-1)
-        loss = criterion(logits, labels)
+        for accum_step in range(GRADIENT_ACCUMULATION_STEPS):
+            model.require_backward_grad_sync = (accum_step == GRADIENT_ACCUMULATION_STEPS - 1)
+            
+            tokens, next_tokens = get_batch("train")
+            
+            output = model(tokens, mask)
+            logits = output.view(-1, VOCAB_SIZE)
+            
+            # Auto-regressive, unsupervised loss
+            loss = criterion(logits, next_tokens.flatten())
+            loss = (loss / GRADIENT_ACCUMULATION_STEPS)
 
-        # Backpropagate the error through the p-net and then through the g-nets
-        loss.backward()
+            # Backpropagate the error through the p-net and then through the g-nets
+            loss.backward()
+            
         gnets.backward()
         
-        nn.utils.clip_grad_norm_(model.parameters(), 0.25) # what value to use here?
+        nn.utils.clip_grad_norm_(model.parameters(), 1.0) # what value to use here?
         
         # Do a gradient-descent step with the p-nets and then the g-nets
         optimizer.step() # Need to still update the parameters that have no g-nets attached!
         if scheduler is not None: scheduler.step()
         gnets.step()
 
-        total_loss += loss.item()
+        total_loss += GRADIENT_ACCUMULATION_STEPS*loss.item()
         # Logging
-        if global_step % LOG_INTERVAL == 0:
+        if iter % LOG_INTERVAL == 0:
             ms_per_batch = (time.time() - start_time) * 1000 / LOG_INTERVAL
-            train_loss = torch.tensor([total_loss / LOG_INTERVAL]).to(rank)
+            train_loss = torch.tensor([total_loss / LOG_INTERVAL]).to(local_rank)
             dist.barrier()
             dist.all_reduce(train_loss, op=dist.ReduceOp.AVG)
             train_loss = train_loss.cpu().item()
             train_ppl = np.exp(train_loss)
 
             if rank == 0:
-                logger.debug(f"epoch {epoch:3d} | {global_step:5d} batches | "
+                logger.debug(f"iter {iter:3d} | "
                              f"ms/batch {ms_per_batch:5.2f} | "
                              f"loss {train_loss:5.2f} | ppl {train_ppl:8.2f}")
                 run.log({"train_loss": train_loss, "train ppl": train_ppl})
             dist.barrier()
             
-            total_loss = 0
+            total_loss = 0.
             start_time = time.time()
 
         # Validation
-        if global_step % VAL_INTERVAL == 0:
-            val_loss = evaluate(model, val_loader)
+        if iter % VAL_INTERVAL == 0:
+            val_loss = evaluate(model)
             dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
             val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
             
@@ -335,9 +336,9 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
                         logger.debug(f"Saving model weights, optimizer,"
                                      f"seed and dataset state under {MODEL_CHCKPT_PATH}.")
                         param_dict = {"seed": SEED,
+                                      "iter": iter,
                                       "model": model.state_dict(),
-                                      "optimizer": optimizer.state_dict(),
-                                      "dataloader": train_loader.state_dict()}
+                                      "optimizer": optimizer.state_dict()}
                         torch.save(param_dict, MODEL_CHCKPT_PATH)
                     else:
                         # Put other processes to sleep while logging...good night!
@@ -345,34 +346,27 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
 
 
 # Evaluation function
-def evaluate(model: nn.Module, eval_loader) -> torch.Tensor:
+@torch.no_grad()
+def evaluate(model: nn.Module) -> torch.Tensor:
     model.eval() # turn on evaluation mode
     total_loss, norm = 0, 0
     global mask
-    with torch.no_grad():
-        start_time = time.time()
-        for data in eval_loader:
-            data = torch.stack(data["input_ids"]).t().to(rank)
-            seq_len = min(SEQ_LEN, data.size(1))
-            
-            tokens = data[:, :seq_len-1]
-            _mask = mask[:seq_len-1, :seq_len-1]
-            output = model(tokens, _mask)
-            
-            logits = output.view(-1, VOCAB_SIZE)
-            labels = data[:, 1:seq_len].reshape(-1)
-            total_loss += criterion(logits, labels).item()
-            norm += 1
+    start_time = time.time()
+    for iter in range(EVAL_ITERS):
+        tokens, next_tokens = get_batch("val")
+        
+        output = model(tokens, mask)
+        logits = output.view(-1, VOCAB_SIZE)
+        total_loss += criterion(logits, next_tokens.flatten()).item()
+        norm += 1
     logger.info(f"Validation time: {time.time() - start_time}")
-    return torch.tensor([total_loss / norm]).to(rank)
+    return torch.tensor([total_loss / norm]).to(local_rank)
 
 
 # Compute initial validation loss
-val_loader = get_dataloader(tokenized_val_dataset, rank, world_size, BATCHSIZE)
-val_loss = evaluate(model, val_loader)
+val_loss = evaluate(model)
 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
 val_ppl = np.exp(val_loss.cpu().item()) # use Word-level PPL
-val_loader = get_dataloader(tokenized_val_dataset, rank, world_size, BATCHSIZE)
 
 
 # Initialize metrics logging on rank 0
@@ -384,7 +378,6 @@ if rank == 0:
     
     run_config = {"commit_hash": commit_hash,
                   "batchsize": BATCHSIZE,
-                  "language": args.language,
                   "compression_factor": compression_factor,
                   "num_params": num_params,
                   "ignored layers": args.ignore_layers,
@@ -395,7 +388,7 @@ if rank == 0:
     wandb.login(key=base_config["accounts"]["wandb_key"], 
                 host=base_config["accounts"]["wandb_address"])
     
-    run_name = experiment_name + "_" + args.language
+    run_name = experiment_name
     log_dir = os.path.join(base_config["dirs"]["log"], run_name)
     
     run = wandb.init(entity=base_config["accounts"]["wandb_user"], 
@@ -409,29 +402,9 @@ if rank == 0:
     run.log({"validation_loss": val_loss, "val ppl": val_ppl})
 
 
-loader = partial(get_dataloader, tokenized_train_dataset, rank, world_size, BATCHSIZE)
+dist.barrier()
+train(model, gnets)
 
-# Actual training loop
-for epoch in range(EPOCHS):
-    dist.barrier()
-    train(model, gnets)
-    SEED += 1
-    
-    tokenized_train_dataset = tokenized_train_dataset.shuffle(seed=SEED)
-    # tokenized_val_dataset = tokenized_val_dataset.shuffle(seed=SEED)
-    
-    train_loader = loader(stateful=True)
-    # val_loader = loader()
-
-
-# Evaluate the best model on the test dataset
-# tokenized_test_dataset = tokenized_test_dataset.shuffle(seed=SEED)
-# test_loader = get_dataloader(tokenized_test_dataset, rank, world_size, 4*BATCHSIZE)
-# model.load_state_dict(torch.load(args.load_model, map_location=torch.device(rank))["model"])
-
-# test_loss = evaluate(model.to(rank), test_loader) 
-# test_ppl = np.exp(test_loss) # word-level PPL
-# logger.info(f"End of training | test loss {test_loss:5.2f} | test ppl {test_ppl:8.2f}")
 dist.destroy_process_group()
 run.finish()
 
