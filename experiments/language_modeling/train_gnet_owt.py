@@ -19,6 +19,8 @@ from torchGB import GenomicBottleneck, FastGenomicBottleneck
 from _transformer import GPT, generate_square_subsequent_mask
 from utils import load_model_layers, load_config, commit_to_experiments_branch
 
+from gradient_utils import cosine_similarity, angle_between_tensors
+
 parser = argparse.ArgumentParser()
 
 parser.add_argument("--gpus", type=str, default="0", help="Which GPUs to use.")
@@ -96,19 +98,19 @@ EVAL_ITERS = experiment_config["val_iters"]
 GRADIENT_ACCUMULATION_STEPS = experiment_config["gradient_accumulation_steps"]
 
 TOTAL_NUM_TOKENS = SEQ_LEN * BATCHSIZE * GRADIENT_ACCUMULATION_STEPS * MAX_ITERS / 1e9
-logger.debug(f"Total number of tokens in training: {TOTAL_NUM_TOKENS:.2f}B")
-
 TOKENS_PER_STEP = BATCHSIZE * GRADIENT_ACCUMULATION_STEPS * world_size * SEQ_LEN
-logger.debug(f"Tokens per step: {TOKENS_PER_STEP}")
-
 
 # Initialize the data directory
 base_config = load_config("config/base_config.yml")
 prefix = base_config["data_dirs"]["prefix"]
 data_dir = os.path.join("/Users/grieser/Projects/bla", "data", "openwebtext")
-logger.debug(f"Data directory: {data_dir}")
 cache_dir = base_config["dirs"]["cache"]
-logger.debug(f"Cache directory: {cache_dir}")
+
+if rank == 0:
+    logger.debug(f"Total number of tokens in training: {TOTAL_NUM_TOKENS:.2f}B")
+    logger.debug(f"Tokens per step: {TOKENS_PER_STEP}")
+    logger.debug(f"Data directory: {data_dir}")
+    logger.debug(f"Cache directory: {cache_dir}")
 
 
 # Commit the current codebase to the experiments branch
@@ -163,10 +165,7 @@ global_local_rank = torch.tensor([rank, local_rank], dtype=torch.int32).to(local
 local_rank_tensor = torch.zeros(2*world_size, dtype=torch.int32).to(local_rank)
 
 dist.all_gather_into_tensor(local_rank_tensor, global_local_rank)
-
 dist.barrier()
-
-logger.debug(f"Received local ranks: {local_rank_tensor}")
 
 # Assemble local ranks into a dictionary
 local_rank_dict = {}
@@ -174,11 +173,13 @@ for i in range(world_size):
     idx = local_rank_tensor[2*i].cpu().item()
     local_rank_dict[idx] = local_rank_tensor[2*i+1].cpu().item()
 
-logger.debug(f"Local Rank Dictionary: {local_rank_dict}")
+if rank == 0:
+    logger.debug(f"Local Rank Dictionary: {local_rank_dict}")
 
 # Setting up the loss and optimizers
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.AdamW(model.parameters(), lr=LR, fused=True, weight_decay=0.1)
+# optimizer = optim.AdamW(model.parameters(), lr=LR, fused=True, weight_decay=0.1)
+optimizer = optim.SGD(model.parameters(), lr=LR, fused=True)
 scheduler = None
 
 
@@ -197,9 +198,9 @@ def make_scheduler(opt, lr):
 
 if args.scheduler:
     scheduler = make_scheduler(optimizer, LR)
-    gnets = FastGenomicBottleneck(model, local_rank_dict, scheduler=make_scheduler, **experiment_config["gnets"])
+    gnets = GenomicBottleneck(model, local_rank_dict, scheduler=make_scheduler, **experiment_config["gnets"])
 else:
-    gnets = FastGenomicBottleneck(model, local_rank_dict, **experiment_config["gnets"])
+    gnets = GenomicBottleneck(model, local_rank_dict, **experiment_config["gnets"])
 
 # Dealing with custom model loading
 # TODO outsource this into an additional lib!
@@ -252,7 +253,7 @@ compression_factor = gnets.compression()
 # Other stuff that is required
 best_val_loss = 1e9
 mask = generate_square_subsequent_mask(SEQ_LEN).to(local_rank)
-
+layer = 0
 
 # Training function
 def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
@@ -261,6 +262,10 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     total_loss = 0
     start_time = time.time()
     
+    new_params = model.module.transformer_encoder.layers[layer].self_attn.in_proj_weight.data.clone()
+    old_params = model.module.transformer_encoder.layers[layer].self_attn.in_proj_weight.data.clone()
+    pnet_grad = torch.ones_like(new_params)
+    
     for iter in range(1, MAX_ITERS+1):
         model.train()
         
@@ -268,6 +273,13 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         optimizer.zero_grad(set_to_none=True)
         gnets.zero_grad()
         gnets.predict_weights() # implicitly updates the model weights!
+        
+        new_params = model.module.transformer_encoder.layers[layer].self_attn.in_proj_weight.data.clone()
+        dp = old_params - new_params
+        if rank == 0:
+            cos_sim = cosine_similarity(dp, pnet_grad)
+            run.log({"cos_sim": cos_sim})
+            logger.debug(f"Cosine similarity: {cos_sim}")
         
         for accum_step in range(GRADIENT_ACCUMULATION_STEPS):
             model.require_backward_grad_sync = (accum_step == GRADIENT_ACCUMULATION_STEPS - 1)
@@ -279,10 +291,14 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             
             # Auto-regressive, unsupervised loss
             loss = criterion(logits, next_tokens.flatten())
-            loss = (loss / GRADIENT_ACCUMULATION_STEPS)
+            loss /= GRADIENT_ACCUMULATION_STEPS
 
             # Backpropagate the error through the p-net and then through the g-nets
             loss.backward()
+            
+        # Access gradient of p-net weights
+        old_params = model.module.transformer_encoder.layers[layer].self_attn.in_proj_weight.data.clone()
+        pnet_grad = model.module.transformer_encoder.layers[layer].self_attn.in_proj_weight.grad.data
             
         gnets.backward()
         
@@ -296,7 +312,7 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         total_loss += GRADIENT_ACCUMULATION_STEPS*loss.item()
         # Logging
         if iter % LOG_INTERVAL == 0:
-            ms_per_batch = (time.time() - start_time) * 1000 / LOG_INTERVAL
+            ms_per_batch = (time.time() - start_time) * 1000 / (LOG_INTERVAL*GRADIENT_ACCUMULATION_STEPS)
             train_loss = torch.tensor([total_loss / LOG_INTERVAL]).to(local_rank)
             dist.barrier()
             dist.all_reduce(train_loss, op=dist.ReduceOp.AVG)

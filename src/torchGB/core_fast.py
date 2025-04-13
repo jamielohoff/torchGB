@@ -16,7 +16,7 @@ from .layers.gnet import *
 from .layers.matrix_decomposition import *
 from .layers.xox import *
 
-from .utils import get_gnet_batchsize
+from .utils import get_gnet_batchsize, top_k_values
 
 
 # Stores how the compression is intended to work for different layer types
@@ -219,7 +219,7 @@ class FastGenomicBottleneck(nn.Module):
         Returns:
             int: Cumulative number of parameters of all g-nets.
         """
-        rank = dist.get_rank() % torch.cuda.device_count()
+        rank = self.local_rank_dict[dist.get_rank()]
         num_params = torch.tensor(0).to(rank) 
         
         for name in self.gnetdict.keys():
@@ -414,6 +414,7 @@ class FastGenomicBottleneck(nn.Module):
                             gnet_batch_size = gnetstack.gnet_input.size()[0]
                             out_scale = gnetstack.gnets[0].output_scale
                             grad_scale =  gnet_batch_size * torch.square(out_scale)
+                            
                             norm_grad = param.grad / grad_scale
                             gnetstack.weights.backward(norm_grad)
                             backpropagated.add(_name)
@@ -473,7 +474,7 @@ class FastGenomicBottleneck(nn.Module):
         _lr = self.lr / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5 
         ########################################################################
 
-        optimizer = lambda params: optim.Adam(params,  lr=_lr, fused=True)
+        optimizer = lambda params: optim.Adam(params,  lr=_lr, fused=True) # optim.SGD(params, lr=_lr, fused=True) # 
         optimizers = [optimizer(gnet.parameters()) for gnet in gnets]
         
         scheduler = self.scheduler

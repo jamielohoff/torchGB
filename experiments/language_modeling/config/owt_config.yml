@@ -1,4 +1,4 @@
-lr: 0.0003
+lr: 0.1
 warmup_iters: 2000
 max_iters: 100_000
 val_iters: 50
@@ -12,15 +12,15 @@ model:
   embedding_dim: 768
   num_heads: 12
   ff_dim: 3072
-  num_layers: 12
+  num_layers: 6
   dropout: 0.1
   tie_weights: true
 
 gnets:
-  lr: 0.0003
+  lr: 0.1 # learning rates need to match to the model lr, so that the cosine similarity is higher!
   hidden_dim: 32
   gnet_batchsize: 10_000
   hypernet_type: "g-net"
   ignore_layers: ["encoder.weight", "decoder.weight", "norm", "bias"]
-  max_tiles_batchsize: 8
-  # compression: 20
+  # max_tiles_batchsize: 8
+  # compression: 1

@@ -240,3 +240,55 @@ def make_row_col_encoding(param_shape: Sequence[int],
                             torch.std(row_col_encoding)
     return row_col_encoding  
 
+
+def top_k_values(matrix, k):
+    """
+    Leaves the top k largest values (by magnitude) of a matrix at their
+    respective values and sets all other values to zero. This version aims
+    for efficiency using numpy operations and handles edge cases.
+
+    Args:
+        matrix (numpy.ndarray): The input matrix.
+        k (int): The number of largest values (by magnitude) to keep.
+                 Must be non-negative.
+
+    Returns:
+        numpy.ndarray: A new matrix with the top k values preserved and others zeroed.
+                       Returns a zero matrix if k <= 0.
+                       Returns a copy of the original matrix if k >= matrix.size.
+
+    Raises:
+        TypeError: If 'matrix' is not a numpy ndarray or 'k' is not an integer.
+        ValueError: If 'k' is negative.
+    """
+
+    # --- Core Logic ---
+    # Flatten the original matrix to work with a 1D array.
+    # This might create a copy, but is necessary for argpartition on the whole data.
+    flat_matrix = matrix.flatten()
+
+    # Find the indices of the top k elements based on their magnitude.
+    # np.argpartition partitions the array such that the element at the k-th position
+    # is the one that *would* be there if the array were sorted. All elements
+    # before it are smaller or equal, and all after are larger or equal.
+    # We use -k to work from the end (largest elements).
+    # This operation has an average time complexity of O(N), where N is matrix.size.
+    # It operates on the absolute values but returns indices corresponding to flat_matrix.
+    top_k = torch.topk(torch.abs(flat_matrix), k)
+    top_k_indices = top_k.indices
+
+    # Create the result array initialized with zeros. This is O(N).
+    result_flat = torch.zeros_like(flat_matrix)
+
+    # Use the obtained indices to place the corresponding top k values
+    # from the original flattened matrix into the zeroed result array.
+    # This is advanced indexing in NumPy.
+    result_flat[top_k_indices] = flat_matrix[top_k_indices]
+
+    # Reshape the flat result array back to the original matrix's shape.
+    # This is typically a very fast operation (O(1)) as it often only
+    # changes metadata (strides) without copying data, unless memory layout forces a copy.
+    result_matrix = result_flat.reshape(matrix.shape)
+
+    return result_matrix
+

@@ -6,6 +6,8 @@ from torch import Tensor
 
 import numpy as np
 
+from .pinv_fc_layer import PseudoInverseLinear
+
 
 class GenomicBottleNet(nn.Module):
     """
@@ -36,11 +38,12 @@ class GenomicBottleNet(nn.Module):
         length = len(sizes) - 1 # no non-linearity on the last layer
         
         layer_list = []
-        for i in range(length):
+        for i in range(length-1):
             layer_list.append(nn.Linear(sizes[i], sizes[i+1]))
             layer_list.append(activation_fn())
                 
-        layer_list.pop(-1)
+        # layer_list.append(PseudoInverseLinear(sizes[-2], sizes[-1]))
+        layer_list.append(nn.Linear(sizes[-2], sizes[-1]))
             
         self.model = nn.Sequential(*layer_list)
         self.init_weights()
@@ -48,7 +51,7 @@ class GenomicBottleNet(nn.Module):
     def init_weights(self) -> None:
         for layer in self.model:
             if isinstance(layer, nn.Linear):
-                nn.init.normal_(layer.weight, mean=0, std=1e-2) # initialization here is key!
+                nn.init.normal_(layer.weight, mean=0, std=1e-1) # initialization here is key!
                 if layer.bias is not None:
                     nn.init.zeros_(layer.bias)
 
@@ -80,14 +83,14 @@ class StochasticGenomicBottleNet(GenomicBottleNet):
     def __init__(self, sizes: Sequence[int], output_scale: Tensor,
                  activation_fn: Optional[Callable[[Tensor], Tensor]] = nn.ReLU) -> None:
         super().__init__(sizes, output_scale, activation_fn=activation_fn)
-        length = len(sizes) - 1 # no non-linearity on the last layer
+        length = len(sizes) - 1
         
         layer_list = []
         for i in range(length):
             layer_list.append(nn.Linear(sizes[i], sizes[i+1]))
             layer_list.append(activation_fn())
                 
-        layer_list.pop(-1)
+        layer_list.pop(-1) # no non-linearity on the last layer
             
         self.model = nn.Sequential(*layer_list)
         self.init_weights()

@@ -46,7 +46,7 @@ def attn_gnet_layer(model: GenomicBottleNet, param: Tensor, hidden_dim: int,
     with torch.no_grad():
         output_scale = torch.std(param.data)
 
-    output_size = 1 if isinstance(model, GenomicBottleNet) else 2
+    output_size = 1 # if isinstance(model, GenomicBottleNet) else 2
     gnet_sizes = (num_inputs, hidden_dim, output_size)
     gnets = [model(gnet_sizes, output_scale)
              for _ in range(num_row_tiles * num_col_tiles)] # add 3*
