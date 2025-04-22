@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import argparse
+from functools import partial
 
 from loguru import logger
 import wandb
@@ -17,9 +18,9 @@ from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 
 from torchGB import GenomicBottleneck, FastGenomicBottleneck
 from _transformer import GPT, generate_square_subsequent_mask
-from utils import load_model_layers, load_config, commit_to_experiments_branch
+from utils import (load_config, commit_to_experiments_branch,
+                   cosine_similarity, load_model, save_model)
 
-from gradient_utils import cosine_similarity, angle_between_tensors
 
 parser = argparse.ArgumentParser()
 
@@ -37,9 +38,6 @@ parser.add_argument("--load_gnets", type=str, default=None,
 parser.add_argument("--load_model", type=str, default=None,
                     help="Path to the model weights.")
 
-parser.add_argument("--checkpoint", action="store_true",
-                    help="Whether to store the model weights and optimizer.")
-
 parser.add_argument("--ignore_layers", type=str, default="",
                     help="Which layers to ignore when compressing with the genomic bottleneck.")
 
@@ -54,14 +52,14 @@ parser.add_argument("--log_level", type=str, default="INFO", help="Set log level
 parser.add_argument("--load_dataloader_state", action="store_true",
                     help="Whether to load the dataset state from a checkpoint.")
 
-parser.add_argument("--scheduler", action="store_true",
-                    help="Whether to use a warmup schedule or not.")
-
 parser.add_argument("--config", type=str, default="owt_config.yml",
                     help="Experiment configuration.")
 
 parser.add_argument("--wandb", type=str, default="online",
                     help="Experiment configuration.")
+
+parser.add_argument("--continue_from_checkpoint", action="store_true",
+                    help="Whether to continue from a checkpoint.")
 
 args = parser.parse_args()
 
@@ -69,6 +67,9 @@ args = parser.parse_args()
 # Setup of logging
 logger.remove()
 logger.add(sys.stderr, level=args.log_level)
+
+_save_model = partial(save_model, logger)
+_load_model = partial(load_model, logger)
 
 
 # Setup of global variables
@@ -130,14 +131,6 @@ fname = experiment_name + "_model_" + ".pth"
 MODEL_CHCKPT_PATH  = os.path.join(base_config["dirs"]["save_model"], fname)
 
 
-# Check if the files already exist
-if rank == 0 and args.checkpoint:
-    if os.path.isfile(GNET_CHCKPT_PATH):
-        logger.warning(f"File {GNET_CHCKPT_PATH} already exists.")
-    if os.path.isfile(MODEL_CHCKPT_PATH):
-        logger.warning(f"File {MODEL_CHCKPT_PATH} already exists.")
-
-
 # Load and create datasets
 train_data = np.memmap(os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r")
 val_data = np.memmap(os.path.join(data_dir, "val.bin"), dtype=np.uint16, mode="r")
@@ -157,8 +150,6 @@ def get_batch(split: str):
 
 # Initialize the model and optimizers
 model = GPT(**experiment_config["model"]).to(local_rank)
-model = DDP(model, device_ids=[local_rank], output_device=local_rank)
-# gnets = GenomicBottleneck(model, **experiment_config["gnets"])
 
 # Communicate local rank to all other ranks
 global_local_rank = torch.tensor([rank, local_rank], dtype=torch.int32).to(local_rank)
@@ -176,15 +167,10 @@ for i in range(world_size):
 if rank == 0:
     logger.debug(f"Local Rank Dictionary: {local_rank_dict}")
 
-# Setting up the loss and optimizers
+# Setting up the loss, optimizers and scheduling
 criterion = nn.CrossEntropyLoss()
-# optimizer = optim.AdamW(model.parameters(), lr=LR, fused=True, weight_decay=0.1)
-optimizer = optim.SGD(model.parameters(), lr=LR, fused=True)
-scheduler = None
-
-
-# NOTE: for larger models, the scheduling should be used!
-# TODO apply scheduler to the gnet as well!
+betas = (0.9, 0.95)
+optimizer = optim.AdamW(model.parameters(), lr=LR, betas=betas, fused=True, weight_decay=0.1)
 
 def make_scheduler(opt, lr):
     linear_increase = LinearLR(opt, start_factor=0.1,end_factor=1.,
@@ -195,60 +181,30 @@ def make_scheduler(opt, lr):
                              milestones=[WARMUP_ITERS])
     return scheduler
 
+scheduler = make_scheduler(optimizer, LR)
 
-if args.scheduler:
-    scheduler = make_scheduler(optimizer, LR)
-    gnets = GenomicBottleneck(model, local_rank_dict, scheduler=make_scheduler, **experiment_config["gnets"])
-else:
-    gnets = GenomicBottleneck(model, local_rank_dict, **experiment_config["gnets"])
+if os.path.isfile(MODEL_CHCKPT_PATH):
+    logger.warning(f"File {MODEL_CHCKPT_PATH} already exists. Loading from checkpoint...")
+    _load_model(MODEL_CHCKPT_PATH, rank, SEED, model, optimizer, scheduler)
 
-# Dealing with custom model loading
-# TODO outsource this into an additional lib!
-if args.load_model is not None:
-    assert os.path.exists(args.load_model), f"File {args.load_model} does not exist."
-    map_loc = torch.device(local_rank)
-    cpu_loc = torch.device("cpu")
-    
-    # Load dataset state if applicable
-    if args.load_dataloader_state:
-        state_dict = torch.load(args.load_model, map_location=cpu_loc)
-        SEED = state_dict["seed"]
-        
-        logger.info(f"Loaded dataloader state from {args.load_model} "
-                    f"with random seed {SEED}")
+model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
-    # Load the model weights
-    state_dict = torch.load(args.load_model, map_location=map_loc)
-    if args.transfer_layers == "":
-        model.load_state_dict(state_dict["model"])
-        optimizer.load_state_dict(state_dict["optimizer"])
-        logger.debug(f"Loaded model weights from {args.load_model}")
-    else:
-        layer_names = args.transfer_layers.split(",")
-        load_model_layers(state_dict, model, optimizer, layer_names)
-        logger.debug(f"Loaded model weights from {args.load_model} "
-                     f"for weights {args.transfer_layers}")
-
-
+### gnet stuff
 # Which layers to ignore when assigning gnets
 ignore_layers = [f".{l}." for l in args.ignore_layers.split(",")]
 experiment_config["gnets"]["ignore_layers"] += ignore_layers
 
+gnets = GenomicBottleneck(model, local_rank_dict, scheduler=make_scheduler, 
+                            **experiment_config["gnets"])
 
-# Load g-net weights if applicable and predict the weights
-if args.load_gnets is not None:
-    assert os.path.exists(args.load_gnets), f"File {args.load_gnets} does not exist."
-    logger.debug(f"Loading g-net weights from {args.load_gnets}.")
-    gnets.load(args.load_gnets)
-    logger.debug("Predicting weights...")
-    with torch.no_grad():
-        gnets.predict_weights()
-
+# Check if there are checkpoints
+if os.path.isfile(GNET_CHCKPT_PATH):
+    logger.warning(f"File {GNET_CHCKPT_PATH} already exists. Loading from checkpoint...")
+    gnets.load(GNET_CHCKPT_PATH)
 
 # Calculate model num_params and compression factor if applicable
 num_params = sum(p.numel() for p in model.parameters())
 compression_factor = gnets.compression()
-
 
 # Other stuff that is required
 best_val_loss = 1e9
@@ -262,8 +218,9 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
     total_loss = 0
     start_time = time.time()
     
-    new_params = model.module.transformer_encoder.layers[layer].self_attn.in_proj_weight.data.clone()
-    old_params = model.module.transformer_encoder.layers[layer].self_attn.in_proj_weight.data.clone()
+    new_params = model.module.transformer_encoder.layers[layer].linear1.weight.data.clone()# self_attn.in_proj_weight.data.clone()
+    old_params = model.module.transformer_encoder.layers[layer].linear1.weight.data.clone()# self_attn.in_proj_weight.data.clone()
+    pnet_update = model.module.transformer_encoder.layers[layer].linear1.weight.data.clone()# self_attn.in_proj_weight.data.clone()
     pnet_grad = torch.ones_like(new_params)
     
     for iter in range(1, MAX_ITERS+1):
@@ -274,12 +231,13 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         gnets.zero_grad()
         gnets.predict_weights() # implicitly updates the model weights!
         
-        new_params = model.module.transformer_encoder.layers[layer].self_attn.in_proj_weight.data.clone()
-        dp = old_params - new_params
+        new_params = model.module.transformer_encoder.layers[layer].linear1.weight.data.clone() # .self_attn.in_proj_weight.data.clone()
+        dp = new_params - old_params
+        magnitude = torch.norm(dp) / (torch.norm(pnet_update) + 1e-7)
         if rank == 0:
-            cos_sim = cosine_similarity(dp, pnet_grad)
-            run.log({"cos_sim": cos_sim})
-            logger.debug(f"Cosine similarity: {cos_sim}")
+            cos_sim = cosine_similarity(dp, pnet_update)
+            run.log({"cos_sim": cos_sim, "magnitude": magnitude})
+            logger.debug(f"Cosine similarity: {cos_sim}, magnitude: {magnitude}")
         
         for accum_step in range(GRADIENT_ACCUMULATION_STEPS):
             model.require_backward_grad_sync = (accum_step == GRADIENT_ACCUMULATION_STEPS - 1)
@@ -297,8 +255,8 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             loss.backward()
             
         # Access gradient of p-net weights
-        old_params = model.module.transformer_encoder.layers[layer].self_attn.in_proj_weight.data.clone()
-        pnet_grad = model.module.transformer_encoder.layers[layer].self_attn.in_proj_weight.grad.data
+        old_params = model.module.transformer_encoder.layers[layer].linear1.weight.data.clone()# .self_attn.in_proj_weight.data.clone()
+        pnet_grad = model.module.transformer_encoder.layers[layer].linear1.weight.data.clone() # .self_attn.in_proj_weight.grad.data
             
         gnets.backward()
         
@@ -306,7 +264,8 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
         
         # Do a gradient-descent step with the p-nets and then the g-nets
         optimizer.step() # Need to still update the parameters that have no g-nets attached!
-        if scheduler is not None: scheduler.step()
+        pnet_update = model.module.transformer_encoder.layers[layer].linear1.weight.data.clone() - new_params
+        scheduler.step()
         gnets.step()
 
         total_loss += GRADIENT_ACCUMULATION_STEPS*loss.item()
@@ -344,21 +303,12 @@ def train(model: nn.Module, gnets: GenomicBottleneck) -> None:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
    
-                if args.checkpoint:
-                    logger.debug(f"Saving g-net weights under {GNET_CHCKPT_PATH}.")
-                    gnets.save(GNET_CHCKPT_PATH) 
-                
-                    if rank == 0:
-                        logger.debug(f"Saving model weights, optimizer,"
-                                     f"seed and dataset state under {MODEL_CHCKPT_PATH}.")
-                        param_dict = {"seed": SEED,
-                                      "iter": iter,
-                                      "model": model.state_dict(),
-                                      "optimizer": optimizer.state_dict()}
-                        torch.save(param_dict, MODEL_CHCKPT_PATH)
-                    else:
-                        # Put other processes to sleep while logging...good night!
-                        time.sleep(1)
+                gnets.save(GNET_CHCKPT_PATH) 
+                if rank == 0:
+                    _save_model(MODEL_CHCKPT_PATH, SEED, model, optimizer)
+                else:
+                    # Put other processes to sleep while logging...good night!
+                    time.sleep(1)
 
 
 # Evaluation function

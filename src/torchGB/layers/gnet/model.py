@@ -42,8 +42,8 @@ class GenomicBottleNet(nn.Module):
             layer_list.append(nn.Linear(sizes[i], sizes[i+1]))
             layer_list.append(activation_fn())
                 
-        # layer_list.append(PseudoInverseLinear(sizes[-2], sizes[-1]))
-        layer_list.append(nn.Linear(sizes[-2], sizes[-1]))
+        layer_list.append(PseudoInverseLinear(sizes[-2], sizes[-1]))
+        # layer_list.append(nn.Linear(sizes[-2], sizes[-1]))
             
         self.model = nn.Sequential(*layer_list)
         self.init_weights()

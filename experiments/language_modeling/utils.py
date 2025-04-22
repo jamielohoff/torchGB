@@ -3,6 +3,9 @@ import time
 import yaml
 import git 
 
+import torch
+import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchdata.stateful_dataloader import StatefulDataLoader
 
@@ -82,17 +85,57 @@ def get_dataloader(dataset,
                 prefetch_factor=prefetch_factor)
 
 
-def load_model_layers(state_dict, model, optimizer, layer_names):
-    model_dict = state_dict["model"]
-    optim_dict = state_dict["optimizer"]
-    new_model_dict = model.state_dict()
-    new_optim_dict = optimizer.state_dict()
-    for key in model_dict.keys():
-        load_layer = any([layer_name in key for layer_name in layer_names])
-        if key in new_model_dict.keys() and load_layer:
-            new_model_dict[key] = model_dict[key]
-            new_optim_dict[key] = optim_dict[key]
-    model.load_state_dict(new_model_dict)
-    optimizer.load_state_dict(new_optim_dict)
+def angle_between_tensors(tensor1, tensor2):
+  """
+  Computes the angle between two pytorch tensors.
+
+  Args:
+    tensor1: The first pytorch tensor.
+    tensor2: The second pytorch tensor.
+
+  Returns:
+    The angle between the two tensors in radians.
+  """
+  return torch.atan2(torch.sum(tensor1 * tensor2), torch.sum(tensor1) * torch.sum(tensor2))
+
+
+def cosine_similarity(tensor1, tensor2):
+  """
+  Computes the cosine similarity between two PyTorch tensors.
+
+  Args:
+    tensor1: The first pytorch tensor.
+    tensor2: The second pytorch tensor.
+
+  Returns:
+    The cosine similarity between the two tensors.
+  """
+  return torch.sum(tensor1 * tensor2) / (torch.norm(tensor1) * torch.norm(tensor2))
+
+def save_model(logger, file_path: str, seed: int, model: nn.Module, 
+               optimizer: optim.Optimizer, scheduler):
+    logger.debug(f"Saving model weights, optimizers and seed under {file_path}.")
+    param_dict = {"seed": seed,
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict()}
+    torch.save(param_dict, file_path)
+
+
+def load_model(logger, file_path: str, rank: int, seed: int, model: nn.Module, 
+               optimizer: optim.Optimizer, scheduler):
+    assert os.path.exists(file_path), f"File {file_path} does not exist."
+    logger.debug(f"Loading model weights, optimizer and seed from {file_path}.")
+    
+    map_loc = torch.device(rank)
+
+    # Load the model weights
+    state_dict = torch.load(file_path, map_location=map_loc)
+    
+    seed = int(state_dict["seed"])
+    torch.manual_seed(seed)
+    model.load_state_dict(state_dict["model"])
+    optimizer.load_state_dict(state_dict["optimizer"])
+    scheduler.load_state_dict(state_dict["scheduler"])
     
     

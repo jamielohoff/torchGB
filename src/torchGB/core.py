@@ -282,14 +282,17 @@ class GenomicBottleneck(nn.Module):
                     entry_name = name + "_state_dict"
                     model_name = "model_" + entry_name
                     optimizer_name = "optimizer_" + entry_name
+                    scheduler_name = "scheduler_" + entry_name
                     
                     checkpoint[model_name] = []
                     checkpoint[optimizer_name] = []
+                    checkpoint[scheduler_name] = []
                     d = self.gnetdict[name]
                     
-                    for gnet, opt in zip(d.gnets, d.optimizers):
+                    for gnet, opt, sched in zip(d.gnets, d.optimizers, d.schedulers):
                         checkpoint[model_name].append(gnet.state_dict())
                         checkpoint[optimizer_name].append(opt.state_dict())
+                        checkpoint[scheduler_name].append(sched.state_dict())
             if dist.get_rank() == rank:
                 torch.save(checkpoint, fname)
             else:
@@ -313,13 +316,17 @@ class GenomicBottleneck(nn.Module):
                 entry_name = name + "_state_dict"
                 model_name = "model_" + entry_name
                 optimizer_name = "optimizer_" + entry_name
+                scheduler_name = "scheduler_" + entry_name
                 d = self.gnetdict[name]
 
-                for gnet, opt, gnet_params, opt_state in zip(d.gnets, d.optimizers,
-                                                             checkpoint[model_name],
-                                                             checkpoint[optimizer_name]):
+                iter = zip(d.gnets, d.optimizers, d.schedulers, 
+                           checkpoint[model_name], checkpoint[optimizer_name],
+                           checkpoint[scheduler_name])
+
+                for gnet, opt, sched, gnet_params, opt_state, sched_state in iter:
                     gnet.load_state_dict(gnet_params)
                     opt.load_state_dict(opt_state)
+                    sched.load_state_dict(sched_state)
 
     def train(self) -> None:
         """
@@ -440,8 +447,8 @@ class GenomicBottleneck(nn.Module):
         for name in self.gnetdict.keys():
             gnetstack = self.gnetdict[name]
             if gnetstack.rank == dist.get_rank():
-                iter = zip(gnetstack.optimizers, gnetstack.schedulers)
-                for optimizer, scheduler in iter:
+                iter = zip(gnetstack.gnets, gnetstack.optimizers, gnetstack.schedulers)
+                for gnet, optimizer, scheduler in iter:
                     optimizer.step()
                     scheduler.step()
                     
@@ -472,14 +479,14 @@ class GenomicBottleneck(nn.Module):
         ########################################################################
         # NOTE: Do not touch! Normalization has been carefully computed...
         ########################################################################
-        _lr = self.lr / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5
+        _lr = self.lr # / (num_layers - 1) ** 0.5 / output_scale.item() ** 0.5
 
-        # optimizer = lambda params: optim.Adam(params,  lr=_lr, fused=True)
-        optimizer = lambda params: optim.SGD(params,  lr=_lr, fused=True)
+        optimizer = lambda params: optim.AdamW(params, lr=_lr, betas=(0.9, 0.95), fused=True, weight_decay=0.1)
+        # optimizer = lambda params: optim.SGD(params, lr=_lr, fused=True)
         optimizers = [optimizer(gnet.parameters()) for gnet in gnets]
         
-        scheduler = self.scheduler
-        schedulers = [scheduler(optimizers[i], _lr) for i in range(len(optimizers))]
+        schedulers = [self.scheduler(optimizers[i], _lr) 
+                      for i in range(len(optimizers))]
         
         self.gnetdict[name] = GNetLayer(name=name, rank=global_rank,
                                         tile_shape=tile_shape, gnets=gnets,
