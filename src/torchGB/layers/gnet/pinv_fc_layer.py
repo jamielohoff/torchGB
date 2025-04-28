@@ -29,6 +29,7 @@ class PseudoInverseLinearFunction(Function):
         Backward pass: Compute gradients w.r.t. inputs of forward.
         grad_output is dL/dY
         """
+        # NOTE: This implementation is incorrect
         x, weight = ctx.saved_tensors
         grad_input = grad_weight = grad_bias = None # Initialize gradients
 
@@ -36,19 +37,19 @@ class PseudoInverseLinearFunction(Function):
         # Standard would be: grad_input = grad_output @ weight
         # Custom: grad_input = grad_output @ pinv(weight)
         if ctx.needs_input_grad[0]: # Check if grad w.r.t x is required
-            try:
-                weight_pinv = torch.linalg.pinv(weight.t())
-                grad_input = grad_output @ weight_pinv
-            except torch.linalg.LinAlgError as e:
-                print(f"Warning: Pseudo-inverse computation failed: {e}")
-                # Fallback or raise error? Using zeros as a fallback example.
-                grad_input = torch.zeros_like(x)
+            grad_input = grad_output @ weight
 
 
         # --- Standard Gradient Calculation for Weight (dL/dW) ---
         if ctx.needs_input_grad[1]: # Check if grad w.r.t weight is required
             # dL/dW = (dL/dY).T @ X
-            grad_weight = grad_output.t() @ x
+            try:
+                x_pinv = torch.linalg.pinv(x.t())
+                grad_input = grad_output @ x_pinv
+            except torch.linalg.LinAlgError as e:
+                print(f"Warning: Pseudo-inverse computation failed: {e}")
+                # Fallback or raise error? Using zeros as a fallback example.
+                grad_input = torch.zeros_like(weight)
 
         # --- Standard Gradient Calculation for Bias (dL/dB) ---
         # Bias gradient exists only if bias was provided in forward

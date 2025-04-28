@@ -21,6 +21,12 @@ from .layers.xox import *
 gnet_types = {}
 
 
+# No-op scheduler fn
+def no_op_scheduler(opt, lr):
+    scheduler = optim.lr_scheduler.LambdaLR(opt, lambda it: 1.)
+    return scheduler
+
+
 # TODO: write this as an abstract interface class
 class HyperNetwork(nn.Module):
     def __init__() -> None:
@@ -164,8 +170,8 @@ class GenomicBottleneck(nn.Module):
     gnetdict: Dict[str, GNetLayer]
     local_rank_dict: Dict[int, int]
     
-    def __init__(self, model: nn.Module, local_rank_dict: Dict[int, int],
-                 hidden_dim: int = 32,  scheduler=None,
+    def __init__(self, model: nn.Module, local_rank_dict: Dict[int, int] = {},
+                 hidden_dim: int = 32,  scheduler: Callable = no_op_scheduler,
                  lr: float = 0.001, gnet_batchsize: int = 10_000, 
                  ignore_layers: Sequence[str] = [],
                  hypernet_type: str = "g-net") -> None:
@@ -175,6 +181,11 @@ class GenomicBottleneck(nn.Module):
         self.scheduler = scheduler
         self.local_rank_dict = local_rank_dict
         register(hypernet_type)
+        
+        # If no local rank dict is provided, then assume there are 4 devices per
+        # GPU and generate it automatically in squential order
+        if local_rank_dict == {}:
+            self.local_rank_dict = {i:i % 4 for i in range(dist.get_world_size())}
         
         # Stores all the information about the gnets
         self.gnetdict = {}
