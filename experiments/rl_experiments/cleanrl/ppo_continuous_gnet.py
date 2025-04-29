@@ -86,7 +86,7 @@ class Args:
     """the target KL divergence threshold"""
 
     # G-net specific arguments
-    compression: int = 5
+    compression: int = 2
     """Compression ratio for the GenomicBottleneck"""
     gnet_batchsize: int = 10000
     """Batchsize used in the g-net/hypernet updates"""
@@ -175,7 +175,6 @@ if __name__ == "__main__":
             monitor_gym=True,
             save_code=True,
         )
-
     # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -183,13 +182,11 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-
     # env setup
     envs = gym.vector.SyncVectorEnv(
         [make_env(args.env_id, i, args.capture_video, run_name, args.gamma) for i in range(args.num_envs)]
     )
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
-
     agent = Agent(envs).to(device)
 
 
@@ -201,6 +198,23 @@ if __name__ == "__main__":
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = "12355"  # Pick an unused port
         dist.init_process_group(backend="gloo", rank=0, world_size=1)
+
+    rank = dist.get_rank()
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_size = dist.get_world_size()
+
+    # Communicate local rank to all other ranks
+    global_local_rank = torch.tensor([rank, local_rank], dtype=torch.int32).to(local_rank)
+    local_rank_tensor = torch.zeros(2*world_size, dtype=torch.int32).to(local_rank)
+
+    dist.all_gather_into_tensor(local_rank_tensor, global_local_rank)
+    dist.barrier()
+
+    # Assemble local ranks into a dictionary
+    local_rank_dict = {}
+    for i in range(world_size):
+        idx = local_rank_tensor[2*i].cpu().item()
+        local_rank_dict[idx] = local_rank_tensor[2*i+1].cpu().item()
 
     #agent = Agent(envs).to(device)
 
@@ -222,10 +236,12 @@ if __name__ == "__main__":
 
         agent = WrappedAgent(agent)
 
-    gnets = FastGenomicBottleneck(
+    gnets = GenomicBottleneck(
         agent,
+        {},
+        #local_rank_dict, 
         compression=args.compression,
-        max_tiles_batchsize=8,  # Optional, tune as needed
+        #max_tiles_batchsize=8,  # Optional, tune as needed
         gnet_batchsize=args.gnet_batchsize,
     )
 

@@ -16,6 +16,8 @@ from .layers.gnet import *
 from .layers.matrix_decomposition import *
 from .layers.xox import *
 
+from .utils import get_gnet_batchsize
+
 
 # Stores how the compression is intended to work for different layer types
 gnet_types = {}
@@ -174,12 +176,19 @@ class GenomicBottleneck(nn.Module):
                  hidden_dim: int = 32,  scheduler: Callable = no_op_scheduler,
                  lr: float = 0.001, gnet_batchsize: int = 10_000, 
                  ignore_layers: Sequence[str] = [],
+                 compression: Optional[float] = None,
                  hypernet_type: str = "g-net") -> None:
         super(GenomicBottleneck, self).__init__()             
         self.model = model
         self.lr = lr
         self.scheduler = scheduler
         self.local_rank_dict = local_rank_dict
+
+        if compression:
+            gnet_batchsize = get_gnet_batchsize(compression, hidden_dim, output_dim=2)
+            print(f"Set compression of {compression}x, "
+                  f"thus gnet_batchsize set to {gnet_batchsize}.")
+
         register(hypernet_type)
         
         # If no local rank dict is provided, then assume there are 4 devices per
@@ -194,6 +203,7 @@ class GenomicBottleneck(nn.Module):
            
         # Iterate over all the modules in the model
         for name, mod in self.model.module.named_modules(): 
+            
             for pname, param in mod.named_parameters():    
                 _name = name + "." + pname 
                 ignore_param = any([lname in _name for lname in ignore_layers])
@@ -202,6 +212,7 @@ class GenomicBottleneck(nn.Module):
                     # NOTE: Edit these lines in order to add a new layers for
                     # compression or edit the way the current compression behavior
                     gnet_type = gnet_types.get(type(mod))
+                    print(str(gnet_type) + name)
                     if gnet_type:
                         # This implements a rudimentary load balancer across devices
                         # that removes the bias towards the first device
