@@ -45,11 +45,11 @@ class PseudoInverseLinearFunction(Function):
             # dL/dW = (dL/dY).T @ X
             try:
                 x_pinv = torch.linalg.pinv(x.t())
-                grad_input = grad_output @ x_pinv
+                grad_weight = grad_output @ x_pinv
             except torch.linalg.LinAlgError as e:
                 print(f"Warning: Pseudo-inverse computation failed: {e}")
                 # Fallback or raise error? Using zeros as a fallback example.
-                grad_input = torch.zeros_like(weight)
+                grad_weight = torch.zeros_like(weight)
 
         # --- Standard Gradient Calculation for Bias (dL/dB) ---
         # Bias gradient exists only if bias was provided in forward
